@@ -745,7 +745,7 @@ SUBROUTINE obs_local(ij,ilev,nvar,hdxf,rdiag,rloc,dep,nobsl,logpfm,zfm)
       ! Observational localization
       !
 
-      rdiag(nobsl) = obserr(nobs_use(n))**2
+      rdiag(nobsl) = obserr(nobs_use(n))**2 / temp_alpha(itemp)   !TEnKF: R/alpha_i
       rloc(nobsl) =EXP(-0.5d0 * ((dist/sigmah)**2 + (dlev/sigmav)**2)) &
                   & * var_local(nvar,iobs)
 
@@ -872,7 +872,7 @@ SUBROUTINE obs_local_p2d(loctype,ij,ilev,nvar,hdxf,rdiag,rloc,dep,nobsl,logpfm,z
       sigmah=sigma_obs
       sigmav=sigma_obsv
 
-      rdiag(nobsl) = obserr(nobs_use(n))**2
+      rdiag(nobsl) = obserr(nobs_use(n))**2 / temp_alpha(itemp)   !TEnKF: R/alpha_i
       rloc(nobsl) =EXP(-0.5d0 * ((dist/sigmah)**2 + (dlev/sigmav)**2)) &
                   & * var_local(nvar,iobs)
 
@@ -965,7 +965,7 @@ END IF
       !
       ! Observational localization
       !
-      rdiag(nobsl) = obserr(n)**2
+      rdiag(nobsl) = obserr(n)**2 / temp_alpha(itemp)   !TEnKF: R/alpha_i
       rloc(nobsl) =EXP( (dlev/sigma_obsv)**2) &
                   & * var_local(nvar,iobs)
     END DO

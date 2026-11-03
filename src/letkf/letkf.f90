@@ -67,7 +67,16 @@ PROGRAM letkf
   WRITE(6,'(A,F15.2)') '  sigma_obsv   :',sigma_obsv
   WRITE(6,'(A,F15.2)') '  sigma_obst   :',sigma_obst
   WRITE(6,'(A,L7)')    '  estpar       :',ESTPAR
+  WRITE(6,'(A,I15)')   '  ntemp        :',ntemp
+  WRITE(6,'(A,F15.6)') '  alpha_s      :',alpha_s
+  WRITE(6,'(A,20F10.6)') '  temp_alpha   :',temp_alpha(1:ntemp)
   WRITE(6,'(A)') '============================================='
+  !The tempering loop is not implemented yet: with ntemp > 1 this program
+  !would run a single step with R/alpha_1, which is not a tempered analysis.
+  IF( ntemp > 1 )THEN
+    WRITE(6,'(A)') 'ERROR: ntemp > 1 is not implemented yet'
+    CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+  ENDIF
   CALL set_common_wrf('gs0100001')
   CALL set_common_mpi_wrf
 !

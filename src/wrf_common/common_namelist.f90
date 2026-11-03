@@ -97,6 +97,14 @@ MODULE common_namelist
   REAL(r_size)       :: minrefdbz=0.0d0          !Reflectivity values below this threshold won't be assimilated.
   REAL(r_size)       :: pseudorh_error=0.1       !Obserational error for pseudo RH observations.
 
+  !TEMPERING (TEnKF / LETKF-T)
+  INTEGER, PARAMETER :: max_ntemp = 20
+  INTEGER      :: ntemp = 1                      !Number of tempering steps (1 = original LETKF).
+  REAL(r_size) :: alpha_s = 1.0d0                !Delay parameter of the exponential weights (thesis Eq. 2.12).
+  REAL(r_size) :: alpha_list(max_ntemp) = -1.0d0 !Explicit weights. Used instead of alpha_s if alpha_list(1) > 0.
+  REAL(r_size) :: temp_alpha(max_ntemp) = 1.0d0  !Weights in use, set by SET_TEMPERING_WEIGHTS.
+  INTEGER      :: itemp = 1                      !Current tempering step. R is scaled as R/temp_alpha(itemp).
+
   !OBSGRID SECTION
   REAL(r_size)       :: regrid_res=1.0d0         !Horizontal resolution of obsgrid grid (degree)
   REAL(r_size)       :: regrid_vert_res=100.0d0  !Vertical resolution of obsgrid grid (hPa)
@@ -136,6 +144,7 @@ NAMELIST / INFLATION / cov_infl_mul , sp_infl_add , relax_alpha_spread , relax_a
 NAMELIST / RADAR_DA  / interpolation_technique ,  nradar , use_wt , use_pseudorh , pseudorh_error , minrefdbz , rainratio_threshold
 NAMELIST / OBSGRID / nbv , narea , vlon1 , vlon2 , vlat1 , vlat2 , compute_stat, filter_input , regrid_output, regrid_res ,  &
                      regrid_vert_res
+NAMELIST / TEMPERING / ntemp , alpha_s , alpha_list
 
 
 INQUIRE(FILE=NAMELIST_FILE, EXIST=file_exist)
@@ -182,8 +191,21 @@ WRITE(*,*)"Warning!! Error during namelist reading at RADAR_DA section"
 WRITE(*,*)"Using default values"
 ENDIF
 REWIND(54)
+!A missing TEMPERING section (end of file) keeps ntemp=1. A section that
+!exists but cannot be read stops the program, so that a typo never turns
+!a tempered experiment silently into a standard LETKF one.
+READ(54,NML=TEMPERING,IOSTAT=IERR)
+IF(IERR > 0)THEN
+WRITE(*,*)"ERROR!! Could not read the TEMPERING section of the namelist"
+STOP 1
+ELSEIF(IERR < 0)THEN
+WRITE(*,*)"Warning!! No TEMPERING section, using ntemp=1"
+ENDIF
+REWIND(54)
 
 CLOSE(54)
+
+CALL SET_TEMPERING_WEIGHTS()
 
 
   var_local(:,1)=var_local_uv(1:nv3d+nv2d)
@@ -205,5 +227,51 @@ CLOSE(54)
   var_local_par(:,8)=var_localp_co(1:np2d)
 
 END SUBROUTINE READ_NAMELIST
+
+!-----------------------------------------------------------------------
+! Tempering weights temp_alpha(1:ntemp), with sum equal to one.
+!   ntemp = 1           : temp_alpha(1) = 1 exactly (original LETKF).
+!   alpha_list(1) > 0   : explicit weights, normalized to sum one.
+!   otherwise           : exponential scheme (thesis Eq. 2.12)
+!                         temp_alpha(i) = exp(-(ntemp+1)*alpha_s/i) / sum_j exp(-(ntemp+1)*alpha_s/j)
+!-----------------------------------------------------------------------
+SUBROUTINE SET_TEMPERING_WEIGHTS
+IMPLICIT NONE
+INTEGER      :: i
+REAL(r_size) :: wsum
+
+IF( ntemp < 1 .OR. ntemp > max_ntemp )THEN
+  WRITE(*,*)"ERROR!! ntemp must be between 1 and ",max_ntemp,", got ",ntemp
+  STOP 1
+ENDIF
+
+temp_alpha = 1.0d0
+itemp = 1
+IF( ntemp == 1 ) RETURN
+
+IF( alpha_list(1) > 0.0d0 )THEN
+  IF( ANY( alpha_list(1:ntemp) <= 0.0d0 ) )THEN
+    WRITE(*,*)"ERROR!! alpha_list needs ntemp positive values"
+    STOP 1
+  ENDIF
+  temp_alpha(1:ntemp) = alpha_list(1:ntemp)
+ELSE
+  IF( alpha_s < 0.0d0 )THEN
+    WRITE(*,*)"ERROR!! alpha_s must be >= 0, got ",alpha_s
+    STOP 1
+  ENDIF
+  DO i=1,ntemp
+    temp_alpha(i) = EXP( -REAL(ntemp+1,r_size) * alpha_s / REAL(i,r_size) )
+  ENDDO
+ENDIF
+
+wsum = SUM( temp_alpha(1:ntemp) )
+IF( alpha_list(1) > 0.0d0 .AND. ABS( wsum - 1.0d0 ) > 1.0d-3 )THEN
+  WRITE(*,*)"ERROR!! alpha_list must sum to one, sum = ",wsum
+  STOP 1
+ENDIF
+temp_alpha(1:ntemp) = temp_alpha(1:ntemp) / wsum
+
+END SUBROUTINE SET_TEMPERING_WEIGHTS
 
 END MODULE common_namelist
