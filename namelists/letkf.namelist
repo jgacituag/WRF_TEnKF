@@ -30,3 +30,7 @@
   use_wt=.true.           
   rainratio_threshold=__RAINRATIO_THRESHOLD__
 /
+&tempering
+  ntemp = __NTEMP__
+  alpha_s = __ALPHA_S__
+/

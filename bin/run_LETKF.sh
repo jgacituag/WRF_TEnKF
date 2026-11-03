@@ -75,6 +75,9 @@ sed -i -e "s|__THRESHOLD_DZ__|$THRESHOLD_DZ|g"                $NAMELISTFILE
 sed -i -e "s|__GROSS_ERROR__|$GROSS_ERROR|g"                  $NAMELISTFILE
 sed -i -e "s|__GROSS_ERROR_REFLECTIVITY__|$GROSS_ERROR_REFLECTIVITY|g"  $NAMELISTFILE
 sed -i -e "s|__RAINRATIO_THRESHOLD__|$RAINRATIO_THRESHOLD|g"  $NAMELISTFILE
+#Tempering (WRF_TEnKF). Unset NTEMP or ALPHA_S give the original LETKF.
+sed -i -e "s|__NTEMP__|${NTEMP:-1}|g"                        $NAMELISTFILE
+sed -i -e "s|__ALPHA_S__|${ALPHA_S:-1.0d0}|g"                $NAMELISTFILE
 
 echo "Linking model files"
 INI_DATE_WIN=$(date -u -d "$DA_INI_DATE UTC +$((($ANALYSIS_FREQ*($STEP-1))+$SPIN_UP_LENGTH+$ANALYSIS_WIN_INI)) seconds" +"%Y-%m-%d %T")

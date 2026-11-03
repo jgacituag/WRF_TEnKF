@@ -74,6 +74,25 @@ tests/           ntemp = 1 regression test against the original executable
 make.sh          build script; writes dist/letkf_<COMPILER>.tar
 ```
 
+## Tests
+
+- `tests/test_weights.sh [COMPILER]` runs serially, without WRF data. It
+  checks the weights against thesis Table 2.1 and the reading of the
+  `&tempering` block (absent, present, misspelled, weights not summing
+  to one).
+- `tests/run_regression.sh CASE_DIR REF_EXE NEW_EXE WORK_DIR` runs on
+  Fugaku, inside one job. It runs the original executable twice and this
+  one once with `ntemp = 1`, on fresh copies of the same inputs, and
+  compares every file `letkf.exe` writes with `cmp`. Exit code 0 means
+  bit-for-bit identical, 1 means different, 2 means the original code is
+  not reproducible in that layout. Run it after every change to `src/`
+  and before every experiment.
+
+Use as `REF_EXE` the `letkf.exe` that the experiments already use (built
+from `wrfutil_hydra` with its `make_all.sh`). If the test fails, build
+the `reference` tag with this repository's `make.sh` and compare again:
+that separates a change in the build from a change in the source.
+
 ## Use with wrfutil
 
 `wrfutil_hydra` stays unchanged. In the experiment configuration, point
