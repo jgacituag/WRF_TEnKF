@@ -1,0 +1,5 @@
+build/
+dist/
+*.o
+*.mod
+__pycache__/
