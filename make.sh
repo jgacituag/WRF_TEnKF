@@ -6,6 +6,8 @@
 # copied from wrfutil_hydra/letkf_code/make_all.sh (commit 586cc96), and
 # the compilation order from wrfutil_hydra/letkf_code/src/wrf/letkf/make.sh.
 # GNU_LOCAL is only meant for syntax checks on a workstation.
+# On Fugaku the NetCDF paths point to /vol0004/ra000007/data/jruiz, which
+# is readable by the group; set NETCDF to override them.
 #
 # Usage: ./make.sh [FUJITSU_FUGAKU|INTEL_FUGAKU|INTEL_HYDRA|GNU_LOCAL]
 # Output: dist/letkf_<COMPILATION_NAME>.tar (copy it to $LETKFDIR/letkf.tar)
@@ -20,7 +22,7 @@ FUJITSU_FUGAKU)
   PARF90="mpifrtpx"
   FFLAGS="-O3 -Nalloc_assign ${DEBUG_FLAGS}"
   OMP="-Kopenmp"
-  NETCDF="/home/ra000007/a04037/data/comp_libs_fujitsu/netcdf/"
+  NETCDF=${NETCDF:-"/vol0004/ra000007/data/jruiz/comp_libs_fujitsu/netcdf/"}   #same library as wrfutil machine.conf
   LIB_NETCDF="-L$NETCDF/lib/ -lnetcdff -lnetcdf -lhdf5_fortran -lhdf5_hl -lhdf5  -lfjprofmpi -lmpi_cxx"
   INC_NETCDF="-I$NETCDF/include/"
   LBLAS="-SSL2BLAMP"
@@ -30,7 +32,7 @@ INTEL_FUGAKU)
   PARF90="mpiifort"
   FFLAGS="-O3 -xHost -convert big_endian -FR ${DEBUG_FLAGS}"
   OMP="-qopenmp"
-  NETCDF="/home/ra000007/a04037/data/comp_libs/netcdf4/"
+  NETCDF=${NETCDF:-"/vol0004/ra000007/data/jruiz/comp_libs/netcdf4/"}
   LIB_NETCDF="-L$NETCDF/lib/ -lnetcdff -lnetcdf -lhdf5_fortran -lhdf5_hl -lhdf5"
   INC_NETCDF="-I$NETCDF/include/"
   LBLAS="-qmkl"

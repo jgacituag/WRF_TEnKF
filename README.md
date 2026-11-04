@@ -88,10 +88,18 @@ make.sh          build script; writes dist/letkf_<COMPILER>.tar
   not reproducible in that layout. Run it after every change to `src/`
   and before every experiment.
 
-Use as `REF_EXE` the `letkf.exe` that the experiments already use (built
-from `wrfutil_hydra` with its `make_all.sh`). If the test fails, build
-the `reference` tag with this repository's `make.sh` and compare again:
-that separates a change in the build from a change in the source.
+- `tests/make_case.sh EXPDIR DATE NBV CASE_DIR` builds a test case from a
+  saved wrfutil experiment, with links only. wrfutil keeps no prior
+  members, so the case uses the saved analyses as "prior": meaningless
+  physically, identical for every executable.
+- `tests/jobs/regression_fugaku.sh` is the PJM job for Fugaku. It
+  compares the `reference` build against `main` (the source change) and,
+  once, the `letkf.exe` of the experiments against the `reference` build
+  (that our build is equivalent). Instructions are in its header.
+
+Both executables of a comparison must come from the same `make.sh` and
+compiler flags; otherwise a difference may come from the build and not
+from the source.
 
 ## Use with wrfutil
 
