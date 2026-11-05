@@ -1,6 +1,6 @@
 #!/bin/bash
 #=======================================================================
-# Build letkf.exe, update_wrf_time.exe and obs_ope.exe.
+# Build letkf.exe, update_wrf_time.exe, obs_ope.exe and synth_obs.exe.
 #
 # Compiler settings for FUJITSU_FUGAKU, INTEL_FUGAKU and INTEL_HYDRA are
 # copied from wrfutil_hydra/letkf_code/make_all.sh (commit 586cc96), and
@@ -101,5 +101,11 @@ $F $INC_NETCDF -o obs_ope.exe SFMT.o common.o common_mpi.o module_map_utils.o co
    common_namelist.o common_smooth2d.o common_obs_wrf.o common_mpi_wrf.o letkf_obs.o \
    obs_ope.o $LBLAS $LIB_NETCDF
 
-tar -cf $ROOT/dist/letkf_${COMPILATION_NAME}.tar letkf.exe update_wrf_time.exe obs_ope.exe
+# synth_obs.exe (WRF_TEnKF, OSSE synthetic reflectivity)
+ln -s $ROOT/src/osse/*.f90 .
+$F $INC_NETCDF -c synth_obs.f90
+$F $INC_NETCDF -o synth_obs.exe SFMT.o common.o common_mpi.o module_map_utils.o common_wrf.o \
+   common_namelist.o common_obs_wrf.o synth_obs.o $LBLAS $LIB_NETCDF
+
+tar -cf $ROOT/dist/letkf_${COMPILATION_NAME}.tar letkf.exe update_wrf_time.exe obs_ope.exe synth_obs.exe
 echo "Built $ROOT/dist/letkf_${COMPILATION_NAME}.tar"

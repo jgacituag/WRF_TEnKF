@@ -101,6 +101,25 @@ Both executables of a comparison must come from the same `make.sh` and
 compiler flags; otherwise a difference may come from the build and not
 from the source.
 
+## OSSE tools
+
+- `radar_obs_lonlatz` (`&radar_da`, false by default): radar records hold
+  longitude, latitude and height above sea level [m] instead of azimuth,
+  elevation and range, and `aer2llz` is skipped. Reflectivity only.
+- `synth_obs.exe` (`src/osse/synth_obs.f90`) writes synthetic reflectivity
+  on model grid points from a truth member, in that format. It uses the
+  analysis operator (`Trans_XtoY`), keeps the points where at least
+  `min_active` ensemble members have echo, and adds N(0, `obs_err`²) noise
+  with a fixed seed. Settings in `synth_obs.namelist`, documented in the
+  source header.
+- `namelists/letkf_osse_cap4.namelist`: LETKF settings of the thesis
+  Chapter 4 multi-obs experiments (2 km localization, no inflation, no
+  RTPP, no reflectivity gross-error check, network of points with at
+  least one member with echo).
+- `tests/local/test_osse_tools.sh` runs the chain on small synthetic
+  wrfout files on a workstation (needs numpy and netCDF4; nothing of it
+  runs on the cluster).
+
 ## Use with wrfutil
 
 `wrfutil_hydra` stays unchanged. In the experiment configuration, point

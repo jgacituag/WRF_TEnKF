@@ -1,0 +1,33 @@
+&general
+  nslots=1
+  nbslot=1
+  nbv=__NBV__
+/
+&localization
+  sigma_obs=10.0d3
+  sigma_obsv=0.4d0
+  sigma_obsz=2.0d3
+  sigma_obst=3.0d0
+  sigma_obs_radar=2.0d3
+  lev_update_q=90
+/
+&observations
+  threshold_dz=1.0d3
+  gross_error=5.0d0
+  gross_error_reflectivity=1000.0d0
+/
+&inflation
+  cov_infl_mul = 1.0d0
+  sp_infl_add = 0.0d0
+  relax_alpha_spread = 0.0d0
+  relax_alpha        = 0.0d0
+/
+&radar_da
+  nradar = __NRADAR__
+  radar_obs_lonlatz = .true.
+  rainratio_threshold = 0.01d0
+/
+&tempering
+  ntemp = __NTEMP__
+  alpha_s = __ALPHA_S__
+/
