@@ -4,7 +4,7 @@
 #PJM -L "node=10"
 #PJM -L "elapse=01:00:00"
 #PJM --mpi "max-proc-per-node=1"
-#PJM -x PJM_LLIO_GFSCACHE=/vol0003:/vol0004
+#PJM -x PJM_LLIO_GFSCACHE=/vol0004
 #PJM --llio sharedtmp-size=20Gi
 #PJM -j
 #PJM -s
@@ -18,12 +18,15 @@
 #                                           (only needed once).
 # Each comparison runs its first executable twice (determinism check).
 #
-# Before submitting, on the login node:
-#   cd ~/WRF_TEnKF
+# Everything lives in the group data area, BASE = /data/ra000007/$USER
+# (/vol0004): the home area (20 GiB) is not for job files, and pjsub
+# refuses to submit from it. Before submitting, on the login node:
+#   cd $BASE/WRF_TEnKF
 #   ./make.sh FUJITSU_FUGAKU                                  # main
 #   git worktree add ../WRF_TEnKF_reference reference
-#   (cd ../WRF_TEnKF_reference && ./make.sh FUJITSU_FUGAKU)   # reference
-#   tests/make_case.sh $EXP 20240319180000 10 ~/tenkf_tests/case_20240319180000_nbv10
+#   cp make.sh ../WRF_TEnKF_reference/ && (cd ../WRF_TEnKF_reference && \
+#     ./make.sh FUJITSU_FUGAKU && git checkout make.sh)       # reference, same flags
+#   tests/make_case.sh $EXP 20240319180000 10 $BASE/tenkf_tests/case_20240319180000_nbv10
 #   pjsub tests/jobs/regression_fugaku.sh
 #
 # One MPI rank per node, as in the experiments (LETKFSKIP = ICORE = 48),
@@ -34,9 +37,10 @@
 # logs, NOUT files and obs.dat are copied to RESULTS.
 #=======================================================================
 set -e
-ROOT=${ROOT:-$HOME/WRF_TEnKF}
-REF_ROOT=${REF_ROOT:-$HOME/WRF_TEnKF_reference}
-CASE_DIR=${CASE_DIR:-$HOME/tenkf_tests/case_20240319180000_nbv10}
+BASE=${BASE:-/data/ra000007/$USER}
+ROOT=${ROOT:-$BASE/WRF_TEnKF}
+REF_ROOT=${REF_ROOT:-$BASE/WRF_TEnKF_reference}
+CASE_DIR=${CASE_DIR:-$BASE/tenkf_tests/case_20240319180000_nbv10}
 DIRECTOR_EXE=${DIRECTOR_EXE:-/data/ra000007/jruiz/data_assimilation_exps/PREVENIR_HIRESOLUTION_DA_FUGAKU_2024031900_5MIN_WINIT/LETKF/code/letkf.exe}
 RUN_B=${RUN_B:-1}                       # 0 skips comparison B
 NPROC=${NPROC:-10}                      # MPI ranks = nodes
@@ -49,7 +53,7 @@ export LD_LIBRARY_PATH=/lib64:/usr/lib64:/opt/FJSVxtclanga/tcsds-latest/lib64:/o
 export MPIEXE="mpiexec -n $NPROC"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
-RESULTS=$HOME/tenkf_tests/results/regression_${STAMP}_${PJM_JOBID}
+RESULTS=$BASE/tenkf_tests/results/regression_${STAMP}_${PJM_JOBID}
 WORK=${PJM_SHAREDTMP:?Run this script as a PJM job}/regression
 mkdir -p $RESULTS $WORK
 

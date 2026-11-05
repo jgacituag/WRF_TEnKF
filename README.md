@@ -122,6 +122,12 @@ from the source.
 
 ## Use with wrfutil
 
+On Fugaku, keep the repository, builds, test cases and results in the
+group data area (`/data/ra000007/$USER`, on `/vol0004`), not in the home
+area (20 GiB per user): jobs must be submitted from the data area and read
+their files from it. Directories that will receive files larger than 1 GB
+from compute nodes (wrfout) need striping, `lfs setstripe -c 8 <dir>`.
+
 `wrfutil_hydra` stays unchanged. In the experiment configuration, point
 `LETKFDIR` to a directory holding `dist/letkf_<COMPILER>.tar` renamed to
 `letkf.tar`, `NAMELISTDIR` to `namelists/`, and use `bin/run_LETKF.sh`.
