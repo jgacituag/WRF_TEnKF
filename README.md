@@ -116,6 +116,10 @@ from the source.
   Chapter 4 multi-obs experiments (2 km localization, no inflation, no
   RTPP, no reflectivity gross-error check, network of points with at
   least one member with echo).
+- `osse/make_fcst_exp.sh` builds a wrfutil DAFCST experiment that
+  forecasts from a given set of analyses, reusing the scripts, namelists,
+  WRF executables and met_em of an existing experiment (copied or linked,
+  never modified). `--dry-run` checks every input first.
 - `tests/local/test_osse_tools.sh` runs the chain on small synthetic
   wrfout files on a workstation (needs numpy and netCDF4; nothing of it
   runs on the cluster).
