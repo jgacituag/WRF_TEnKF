@@ -259,10 +259,24 @@ timeslots: DO islot=1,nslots
       IF( tmpradar(n) .GT. 0.0d0) THEN 
           !This is a radar observation.
           current_radar=NINT(tmpradar(n))
+          IF( radar_obs_lonlatz )THEN
+            !WRF_TEnKF: the file already holds lon, lat, z (read into the az, el, ra slots).
+            IF( NINT(tmpelm(n)) == id_radialwind_obs )THEN
+              WRITE(6,*)'ERROR: radar_obs_lonlatz does not support radial winds (no beam geometry)'
+              CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+            ENDIF
+            tmplon(n) = tmpaz(n)
+            tmplat(n) = tmpel(n)
+            tmplev(n) = tmpra(n)
+            tmpaz(n)  = 0.0d0
+            tmpel(n)  = 0.0d0
+            tmpra(n)  = 0.0d0
+          ELSE
           !Convert from azimuth,elevation,range to lat,lon,z
           CALL aer2llz(radar_lon(current_radar),radar_lat(current_radar),radar_z(current_radar),tmpaz(n), &
                        tmpel(n),tmpra(n),tmplon(n),tmplat(n),tmplev(n))
           !WRITE(6,*)tmpaz(n),tmpel(n),tmpra(n),tmpdat(n)
+          ENDIF
       ENDIF
       CALL latlon_to_ij(projection,tmplat(n),tmplon(n),tmpi(n),tmpj(n))
       !CALL ll2ij(tmpelm(n),tmplon(n),tmplat(n),tmpi(n),tmpj(n))

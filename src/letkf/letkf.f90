@@ -68,6 +68,7 @@ PROGRAM letkf
   WRITE(6,'(A,F15.2)') '  sigma_obst   :',sigma_obst
   WRITE(6,'(A,L7)')    '  estpar       :',ESTPAR
   WRITE(6,'(A,I15)')   '  ntemp        :',ntemp
+  WRITE(6,'(A,L7)')    '  radar_lonlatz:',radar_obs_lonlatz
   WRITE(6,'(A,F15.6)') '  alpha_s      :',alpha_s
   WRITE(6,'(A,20F10.6)') '  temp_alpha   :',temp_alpha(1:ntemp)
   WRITE(6,'(A)') '============================================='
