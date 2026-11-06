@@ -4,6 +4,20 @@ PROGRAM wrf_to_wps
 !The data can only be input in mercator or lat-lon proyections. (metgrid does not accept other proyections as input)
 !WARNING! Surface data is initialized with dummy values 
 !QCLOUD, QRAIN, etc are included in the file. Namelist variables has to be set in order to have it vertically interpolated by real routine.
+!
+!WRF_TEnKF (J. Gacitua): one extra level is written above the WRF mass levels,
+!at the model top pressure P_TOP. real.exe needs input data that reach up to
+!p_top_requested, and the highest mass level of a WRF output lies below the
+!model top (e.g. ~1190 Pa for P_TOP = 1100 Pa). Values on the extra level:
+!  PRESSURE = P_TOP
+!  HGT      = geopotential of the top w level (PH+PHB), i.e. the model's own height of P_TOP
+!  TT       = mean temperature of the layer between the highest mass level and P_TOP,
+!             from the hydrostatic thickness: Tv = (phi_top - phi_k) / (Rd ln(p_k/P_TOP))
+!  WW       = W on the top w level
+!  UU, VV, SPECHUMD = values of the highest mass level; QC, QR, QI, QS, QG = 0
+!The height of the highest mass level is also corrected: read_var_wrf does not
+!read the top w level of PH, so the original averaged phi_k with zero there.
+!Set num_metgrid_levels (METLEV) to the number of WRF mass levels + 2.
 
   USE met_data_module
   USE common_wrf
@@ -15,6 +29,9 @@ PROGRAM wrf_to_wps
   INTEGER :: nlev_ns,nlon_ns,nlat_ns,nlev_soil_ns
   INTEGER :: i,j,k
   INTEGER :: ncid
+  INTEGER :: nout, varid, start4(4), count4(4)          !WRF_TEnKF: model-top level
+  REAL(r_sngl),ALLOCATABLE :: phw(:,:,:), buf(:,:,:)    !geopotential of the two top w levels
+  REAL(r_sngl),ALLOCATABLE :: ttop(:,:), wtop(:,:), ghttop(:,:)
   !REAL(4),ALLOCATABLE :: dnw(:) 
   
   REAL(r_sngl),ALLOCATABLE :: ps(:,:)
@@ -73,7 +90,7 @@ PROGRAM wrf_to_wps
   nlev_ns = nlev-1
   nlev_soil_ns = nlev_soil
 
- ALLOCATE(output_data % xlvl(nlev))
+ ALLOCATE(output_data % xlvl(nlev+1))
 
   output_data % nx = nlon_ns
   output_data % ny = nlat_ns
@@ -94,7 +111,8 @@ PROGRAM wrf_to_wps
   output_data % stdlon   = pstdlon   
   output_data % hdate =  hdate ! WRF INPUT/OUTPUT FORMAT
   output_data % xfcst = 0.0
-  DO k=1,nlev_ns
+  nout = nlev_ns + 1     !WRF_TEnKF: mass levels + model-top level
+  DO k=1,nout
   output_data % xlvl(k) = k !znu(k) !1e5-REAL(k)   !Tengo que ver que hay que poner aca.
   ENDDO
   output_data % version = 5  !WPS
@@ -105,7 +123,7 @@ PROGRAM wrf_to_wps
   output_data % startlat = lat(1,1)
   output_data % startlon = lon(1,1) 
 
-  ALLOCATE(output_data % slab (nlon_ns,nlat_ns,nlev_ns))
+  ALLOCATE(output_data % slab (nlon_ns,nlat_ns,nout))
 
 !  WRITE(6,'(A)') '*** grid information ***'
 !  WRITE(6,'(3(2X,A,I5))') 'nlon =',nlon,'nlat =',nlat,'nlev =',nlev 
@@ -278,6 +296,31 @@ PROGRAM wrf_to_wps
   write(*,*)'Reading TOPOGRAPHY'
   topo=phi0(1:nlon_ns,1:nlat_ns)
 
+  !!! WRF_TEnKF: geopotential of the two top w levels and W on the top one
+  ALLOCATE(phw(nlon_ns,nlat_ns,2), buf(nlon_ns,nlat_ns,2), ttop(nlon_ns,nlat_ns), &
+           wtop(nlon_ns,nlat_ns), ghttop(nlon_ns,nlat_ns))
+  start4 = (/ 1, 1, nlev-1, 1 /)
+  count4 = (/ nlon_ns, nlat_ns, 2, 1 /)
+  CALL check_io(NF_INQ_VARID(ncid,'PH',varid))
+  CALL check_io(NF_GET_VARA_REAL(ncid,varid,start4,count4,phw))
+  CALL check_io(NF_INQ_VARID(ncid,'PHB',varid))
+  CALL check_io(NF_GET_VARA_REAL(ncid,varid,start4,count4,buf))
+  phw = phw + buf
+  start4 = (/ 1, 1, nlev, 1 /)
+  count4 = (/ nlon_ns, nlat_ns, 1, 1 /)
+  CALL check_io(NF_INQ_VARID(ncid,'W',varid))
+  CALL check_io(NF_GET_VARA_REAL(ncid,varid,start4,count4,wtop))
+  !Height of the highest mass level (average of its two w levels) and of the top
+  ght(:,:,nlev_ns) = 0.5 * ( phw(:,:,1) + phw(:,:,2) ) / gg
+  ghttop = phw(:,:,2) / gg
+  !Layer-mean virtual temperature between the highest mass level and P_TOP
+  ttop = gg * ( ghttop - ght(:,:,nlev_ns) ) / ( rd * LOG( p(:,:,nlev_ns) / REAL(p_top,r_sngl) ) )
+  ttop = ttop / ( 1.0 + 0.608 * qv(:,:,nlev_ns) )
+  WRITE(6,'(A,F10.2,A,2F9.2,A,2F9.2)') 'Model-top level: P_TOP =', p_top, &
+       ' Pa; T top min/max =', MINVAL(ttop), MAXVAL(ttop), &
+       ' K; T highest mass level min/max =', MINVAL(t(:,:,nlev_ns)), MAXVAL(t(:,:,nlev_ns))
+  DEALLOCATE(phw, buf)
+
   CALL check_io(NF_CLOSE(ncid))
   
   !!! COMPUTE SEA LEVEL PRESSURE
@@ -292,96 +335,108 @@ PROGRAM wrf_to_wps
   output_data % field ='UU'
   output_data % units ='m s-1'
   output_data % desc ='U'
-  output_data % slab =  u  
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = u
+  output_data % slab(:,:,nout) = u(:,:,nlev_ns)
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !VV
   output_data % field ='VV'
   output_data % units ='m s-1'
   output_data % desc ='V'
-  output_data % slab =  v 
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = v
+  output_data % slab(:,:,nout) = v(:,:,nlev_ns)
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !WW
   output_data % field ='WW'
   output_data % units ='m s-1'
   output_data % desc ='W'
-  output_data % slab =  w
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = w
+  output_data % slab(:,:,nout) = wtop
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !TT
   output_data % field ='TT'
   output_data % units ='K'
   output_data % desc ='Temperature'
-  output_data % slab =  t
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = t
+  output_data % slab(:,:,nout) = ttop
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !P
   output_data % field ='PRESSURE'
   output_data % units ='Pa'
   output_data % desc ='none'
-  output_data % slab =  p
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = p
+  output_data % slab(:,:,nout) = REAL(p_top,r_sngl)
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !HGT
   output_data % field ='HGT'
   output_data % units ='m'
   output_data % desc ='none'
-  output_data % slab =  ght / gg
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = ght / gg
+  output_data % slab(:,:,nout) = ghttop / gg
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !QV
   output_data % field ='SPECHUMD'
   output_data % units ='Kg Kg-1'
   output_data % desc ='Specific Humidity'
-  output_data % slab =  qv
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qv
+  output_data % slab(:,:,nout) = qv(:,:,nlev_ns)
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
   
   !QC
   output_data % field ='QC'
   output_data % units ='Kg Kg-1'
   output_data % desc ='none'
-  output_data % slab =  qc
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qc
+  output_data % slab(:,:,nout) = 0.0
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !QR
   output_data % field ='QR'
   output_data % units ='Kg Kg-1'
   output_data % desc ='none'
-  output_data % slab =  qr
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qr
+  output_data % slab(:,:,nout) = 0.0
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !QI
   output_data % field ='QI'
   output_data % units ='Kg Kg-1'
   output_data % desc ='none'
-  output_data % slab =  qci
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qci
+  output_data % slab(:,:,nout) = 0.0
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !QS
   output_data % field ='QS'
   output_data % units ='Kg Kg-1'
   output_data % desc ='none'
-  output_data % slab =  qs
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qs
+  output_data % slab(:,:,nout) = 0.0
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !QG
   output_data % field ='QG'
   output_data % units ='Kg Kg-1'
   output_data % desc ='none'
-  output_data % slab =  qg
-  output_data % nlev = nlev_ns
+  output_data % slab(:,:,1:nlev_ns) = qg
+  output_data % slab(:,:,nout) = 0.0
+  output_data % nlev = nout
   CALL WRITE_SLAB(grdfid)
 
   !PS

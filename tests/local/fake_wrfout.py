@@ -95,7 +95,7 @@ def write_member(path, imem, rng):
     s3 = ("Time", "soil_layers_stag", "south_north", "west_east")
     var("SMOIS", s3, np.full((1, NSOIL, NY, NX), 0.3))
     var("TSLB", s3, np.full((1, NSOIL, NY, NX), 290.0))
-    var("P_TOP", ("Time",), [5000.0])
+    var("P_TOP", ("Time",), [1.0e5 * np.exp(-zw[-1] / 8000.0)])   # pressure of the top w level
     var("P00", ("Time",), [1.0e5])
     var("DNW", ("Time", "bottom_top"), np.full((1, NZ), -1.0 / NZ))
     var("ZNU", ("Time", "bottom_top"), np.linspace(1, 0, NZ)[None])

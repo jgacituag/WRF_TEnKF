@@ -27,7 +27,11 @@
 #                             takes its boundaries from its own analyses):
 #                             WPS_DATA_SOURCE='WRF', wrf_to_wps + metgrid, with
 #                             SRC_EXP/WPS/code and its geo_em. The met_em go to
-#                             NEW_EXP/HIST/WPS/met_em_ori/.
+#                             NEW_EXP/HIST/WPS/met_em_ori/. wrf_to_wps.exe is
+#                             the WRF_TEnKF build, which adds the model-top
+#                             level that real.exe needs (src/wps/wrf_to_wps.f90);
+#                             METLEV grows by one accordingly. Override the
+#                             executable with --wrf-to-wps EXE.
 #   --met-em-links MET_ROOT   link existing met_em.d01.<date>.nc files found
 #                             under MET_ROOT/*/<MEM>/ into the folder this
 #                             forecast expects (e.g. job 3 reusing the met_em
@@ -57,11 +61,13 @@
 #=======================================================================
 set -e
 DRY=0 ; BDYMODE=src ; BDYARG=""
+W2W=$(cd "$(dirname "$0")/.." && pwd)/build/FUJITSU_FUGAKU/wrf_to_wps.exe
 while [[ "$1" == --* ]]; do
   case $1 in
     --dry-run)       DRY=1 ; shift ;;
     --bdy-from-anal) BDYMODE=anal ; BDYARG=$(readlink -f "$2") ; shift 2 ;;
     --met-em-links)  BDYMODE=links ; BDYARG=$(readlink -f "$2") ; shift 2 ;;
+    --wrf-to-wps)    W2W=$(readlink -f "$2") ; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
 done
@@ -143,9 +149,10 @@ src)
   ;;
 anal)
   check "readable WPS executables ($SRC/WPS/code)" test -r $SRC/WPS/code -a -x $SRC/WPS/code
-  for exe in metgrid.exe wrf_to_wps.exe; do
-    check "$exe in $SRC/WPS/code" test -e $SRC/WPS/code/$exe
-  done
+  check "metgrid.exe in $SRC/WPS/code" test -e $SRC/WPS/code/metgrid.exe
+  check "WRF_TEnKF wrf_to_wps.exe with model-top level ($W2W)" test -x $W2W
+  METLEV_SRC=$(confval $SRC/conf/model.conf METLEV)
+  echo "  info  METLEV $METLEV_SRC -> $((METLEV_SRC+1)) (extra model-top level)"
   check "METGRID.TBL in $SRC/WPS/code/metgrid" test -e $SRC/WPS/code/metgrid/METGRID.TBL
   check "readable geo_em ($SRC/WPS/geogrid/geo_em.d01.nc)" test -r $SRC/WPS/geogrid/geo_em.d01.nc
   check "main_FCST.sh links met_em_ori when BDY_PERT=0" grep -q met_em_ori $SRC/bin/main_FCST.sh
@@ -177,7 +184,9 @@ case $BDYMODE in
   src)   echo "                     RUN_WPS=0  EXTWPSPATH=$SRC/HIST/WPS/met_em" ;;
   anal)  echo "                     RUN_WPS=1  WPS_DATA_SOURCE='WRF'  BDYPATH=$NEWABS/BDY/  EXTWPSPATH=''"
          echo "  BDY/$INI_BDY_TAG/<MEM>/wrfout_d01_<date> -> $BDYARG/<date>/anal<MEM>"
-         echo "  WPS/code/* -> $SRC/WPS/code/*,  WPS/geogrid/geo_em.d01.nc -> $SRC/WPS/geogrid/" ;;
+         echo "  WPS/code/* -> $SRC/WPS/code/* except wrf_to_wps.exe -> $W2W"
+         echo "  WPS/geogrid/geo_em.d01.nc -> $SRC/WPS/geogrid/"
+         echo "  conf/model.conf  : METLEV=$((METLEV_SRC+1))" ;;
   links) echo "                     RUN_WPS=0  EXTWPSPATH=$NEWABS/BDY_MET_EM"
          echo "  BDY_MET_EM/$INI_BDY_TAG/<MEM>/met_em.d01.<date>.nc -> files under $BDYARG" ;;
 esac
@@ -249,6 +258,9 @@ anal)
   done
   mkdir -p $NEW/WPS/code $NEW/WPS/geogrid $NEW/HIST/WPS/met_em_ori
   ln -s $SRC/WPS/code/* $NEW/WPS/code/
+  rm -f $NEW/WPS/code/wrf_to_wps.exe
+  cp $W2W $NEW/WPS/code/wrf_to_wps.exe      #a copy, so a later rebuild cannot change a running experiment
+  setvar $NEW/conf/model.conf METLEV $((METLEV_SRC+1))
   ln -s $SRC/WPS/geogrid/geo_em.d01.nc $NEW/WPS/geogrid/
   stripe $NEW/HIST/WPS/met_em_ori 4
   stripe $NEW/WPS 4         #intermediate files of wrf_to_wps

@@ -1,6 +1,6 @@
 #!/bin/bash
 #=======================================================================
-# Build letkf.exe, update_wrf_time.exe, obs_ope.exe and synth_obs.exe.
+# Build letkf.exe, update_wrf_time.exe, obs_ope.exe, synth_obs.exe and wrf_to_wps.exe.
 #
 # Compiler settings for FUJITSU_FUGAKU, INTEL_FUGAKU and INTEL_HYDRA are
 # copied from wrfutil_hydra/letkf_code/make_all.sh (commit 586cc96), and
@@ -107,5 +107,12 @@ $F $INC_NETCDF -c synth_obs.f90
 $F $INC_NETCDF -o synth_obs.exe SFMT.o common.o common_mpi.o module_map_utils.o common_wrf.o \
    common_namelist.o common_obs_wrf.o synth_obs.o $LBLAS $LIB_NETCDF
 
-tar -cf $ROOT/dist/letkf_${COMPILATION_NAME}.tar letkf.exe update_wrf_time.exe obs_ope.exe synth_obs.exe
+# wrf_to_wps.exe (wrfutil tool with the WRF_TEnKF model-top level)
+ln -s $ROOT/src/wps/*.f90 .
+$F -c met_data.f90
+$F $INC_NETCDF -c wrf_to_wps.f90
+$F $INC_NETCDF -o wrf_to_wps.exe SFMT.o common.o module_map_utils.o common_wrf.o met_data.o \
+   wrf_to_wps.o $LIB_NETCDF
+
+tar -cf $ROOT/dist/letkf_${COMPILATION_NAME}.tar letkf.exe update_wrf_time.exe obs_ope.exe synth_obs.exe wrf_to_wps.exe
 echo "Built $ROOT/dist/letkf_${COMPILATION_NAME}.tar"
