@@ -88,6 +88,7 @@ confval () { # $1 = file, $2 = variable: first numeric value assigned
   grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/.*$2=['\"]?([0-9]*).*/\1/"
 }
 
+TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.stdin.* --exclude=__pycache__ --exclude=nohup.out"
 echo "== Checks"
 for d in bin lib conf NAMELIST WRF/code; do
   check "readable $SRC/$d" test -r $SRC/$d -a -x $SRC/$d
@@ -95,6 +96,13 @@ done
 check "real.exe, wrf.exe, da_update_bc.exe in WRF/code" \
       test -e $SRC/WRF/code/real.exe -a -e $SRC/WRF/code/wrf.exe -a -e $SRC/WRF/code/da_update_bc.exe
 check "main_FCST.sh handles EXTWPSPATH" grep -q EXTWPSPATH $SRC/bin/main_FCST.sh
+UNREADABLE=$(cd $SRC && find bin lib conf NAMELIST \( -name '*.out' -o -name '*.err' -o -name '*.stats' \
+              -o -name '.stdin.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
+[ -n "$UNREADABLE" ] && echo "$UNREADABLE" | sed 's/^/        unreadable /'
+check "every file to copy from bin, lib, conf, NAMELIST is readable" test -z "$UNREADABLE"
+for f in bin/main_FCST.sh bin/run_ensfcst.sh bin/run_WPS.sh lib/timeutils.sh lib/encolarPJM.sh; do
+  check "readable $f" test -r $SRC/$f
+done
 check "queue_sub.sh present" test -x $SRC/bin/queue_sub.sh
 nmiss=0
 for m in $MEMS; do
@@ -188,12 +196,9 @@ fi
 echo "== Building $NEWABS"
 mkdir -p $NEWABS
 NEW=$NEWABS
-for d in bin lib conf NAMELIST; do
-  cp -r $SRC/$d $NEW/
-done
-find $NEW/bin -maxdepth 1 \( -name '*.out' -o -name '*.err' -o -name '*.stats' -o -name '.stdin.*' \) -delete
-find $NEW/bin -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-find $NEW/bin -name 'nohup.out' -delete
+#Scripts and configuration, without job logs, caches and scratch files
+#(some of them are not readable by other users of the group).
+( cd $SRC && tar -cf - $TAR_EXCLUDE bin lib conf NAMELIST ) | ( cd $NEW && tar -xf - )
 rm -f $NEW/conf/step.conf
 mkdir -p $NEW/WRF/code $NEW/HIST/ANAL $NEW/HIST/DAFCST $NEW/LOGS $NEW/PROCS
 ln -s $SRC/WRF/code/* $NEW/WRF/code/
