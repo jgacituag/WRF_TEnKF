@@ -107,6 +107,8 @@ MODULE common_namelist
   REAL(r_size) :: alpha_list(max_ntemp) = -1.0d0 !Explicit weights. Used instead of alpha_s if alpha_list(1) > 0.
   REAL(r_size) :: temp_alpha(max_ntemp) = 1.0d0  !Weights in use, set by SET_TEMPERING_WEIGHTS.
   INTEGER      :: itemp = 1                      !Current tempering step. R is scaled as R/temp_alpha(itemp).
+  INTEGER      :: temp_relax_mode = 1            !With ntemp > 1: RTPP/RTPS applied once, after the last step, against
+                                                 !the original prior (1), or at every step against that step's prior (2).
 
   !OBSGRID SECTION
   REAL(r_size)       :: regrid_res=1.0d0         !Horizontal resolution of obsgrid grid (degree)
@@ -148,7 +150,7 @@ NAMELIST / RADAR_DA  / interpolation_technique ,  nradar , use_wt , use_pseudorh
                        radar_obs_lonlatz
 NAMELIST / OBSGRID / nbv , narea , vlon1 , vlon2 , vlat1 , vlat2 , compute_stat, filter_input , regrid_output, regrid_res ,  &
                      regrid_vert_res
-NAMELIST / TEMPERING / ntemp , alpha_s , alpha_list
+NAMELIST / TEMPERING / ntemp , alpha_s , alpha_list , temp_relax_mode
 
 
 INQUIRE(FILE=NAMELIST_FILE, EXIST=file_exist)
@@ -252,6 +254,11 @@ ENDIF
 temp_alpha = 1.0d0
 itemp = 1
 IF( ntemp == 1 ) RETURN
+
+IF( temp_relax_mode /= 1 .AND. temp_relax_mode /= 2 )THEN
+  WRITE(*,*)"ERROR!! temp_relax_mode must be 1 (after the last step) or 2 (every step), got ",temp_relax_mode
+  STOP 1
+ENDIF
 
 IF( alpha_list(1) > 0.0d0 )THEN
   IF( ANY( alpha_list(1:ntemp) <= 0.0d0 ) )THEN

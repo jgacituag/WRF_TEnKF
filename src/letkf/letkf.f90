@@ -20,6 +20,7 @@ PROGRAM letkf
   IMPLICIT NONE
   REAL(r_size),ALLOCATABLE :: omb(:)
   REAL(r_size),ALLOCATABLE :: oma(:)
+  REAL(r_size),ALLOCATABLE :: prior3d(:,:,:,:),prior2d(:,:,:)   !WRF_TEnKF: original prior, for temp_relax_mode = 1
   REAL(r_size) :: rtimer00,rtimer
   INTEGER :: ierr
   CHARACTER(10) :: stdoutf='NOUT-00000'
@@ -71,12 +72,22 @@ PROGRAM letkf
   WRITE(6,'(A,L7)')    '  radar_lonlatz:',radar_obs_lonlatz
   WRITE(6,'(A,F15.6)') '  alpha_s      :',alpha_s
   WRITE(6,'(A,20F10.6)') '  temp_alpha   :',temp_alpha(1:ntemp)
+  WRITE(6,'(A,I15)')   '  temp_relax_mode:',temp_relax_mode
   WRITE(6,'(A)') '============================================='
-  !The tempering loop is not implemented yet: with ntemp > 1 this program
-  !would run a single step with R/alpha_1, which is not a tempered analysis.
+  !WRF_TEnKF: options that the tempering loop does not support (yet).
   IF( ntemp > 1 )THEN
-    WRITE(6,'(A)') 'ERROR: ntemp > 1 is not implemented yet'
-    CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+    IF( ESTPAR )THEN
+      WRITE(6,'(A)') 'ERROR: ntemp > 1 does not support parameter estimation (ESTPAR)'
+      CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+    ENDIF
+    IF( cov_infl_mul <= 0.0d0 )THEN
+      WRITE(6,'(A)') 'ERROR: ntemp > 1 needs a fixed multiplicative inflation (cov_infl_mul > 0)'
+      CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+    ENDIF
+    IF( nslots /= 1 )THEN
+      WRITE(6,'(A)') 'ERROR: ntemp > 1 needs a single time slot (nslots = 1)'
+      CALL MPI_ABORT(MPI_COMM_WORLD,1,ierr)
+    ENDIF
   ENDIF
   CALL set_common_wrf('gs0100001')
   CALL set_common_mpi_wrf
@@ -142,7 +153,38 @@ PROGRAM letkf
 
   IF(ESTPAR)ALLOCATE(analp2d(nij1,nbv,np2d))
   !WRITE(*,*)'CTRL7'
-  CALL das_letkf()
+  !
+  ! WRF_TEnKF: tempering loop. Step 1 uses H(x) and the quality control of
+  ! set_letkf_obs; each later step starts from the previous analysis and
+  ! recomputes H(x) for the same observations. das_letkf scales R by
+  ! 1/temp_alpha(itemp). With ntemp = 1 this is the original single call.
+  !
+  IF( ntemp > 1 .AND. temp_relax_mode == 1 .AND. &
+      ( RELAX_ALPHA /= 0.0d0 .OR. RELAX_ALPHA_SPREAD /= 0.0d0 ) )THEN
+    ALLOCATE(prior3d(nij1,nlev,nbv,nv3d),prior2d(nij1,nbv,nv2d))
+    prior3d = gues3d
+    prior2d = gues2d
+  ENDIF
+  DO itemp=1,ntemp
+    IF( itemp > 1 )THEN
+      CALL temper_next_gues()
+      CALL set_letkf_obs_temp(gues3d,gues2d)
+      CALL CPU_TIME(rtimer)
+      WRITE(6,'(A,I2,A,2F10.2)') '### TIMER(OBS_OPERATOR_STEP',itemp,'):',rtimer,rtimer-rtimer00
+      rtimer00=rtimer
+    ENDIF
+    CALL das_letkf()
+    IF( ntemp > 1 )THEN
+      CALL CPU_TIME(rtimer)
+      WRITE(6,'(A,I2,A,2F10.2)') '### TIMER(DAS_LETKF_STEP',itemp,'):',rtimer,rtimer-rtimer00
+      rtimer00=rtimer
+    ENDIF
+  END DO
+  itemp = ntemp
+  IF( ALLOCATED(prior3d) )THEN
+    CALL temper_final_relax(prior3d,prior2d)
+    DEALLOCATE(prior3d,prior2d)
+  ENDIF
 
   DEALLOCATE(gues3d,gues2d)
 

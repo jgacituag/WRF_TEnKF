@@ -33,4 +33,5 @@
 &tempering
   ntemp = __NTEMP__
   alpha_s = __ALPHA_S__
+  temp_relax_mode = __TEMP_RELAX_MODE__
 /

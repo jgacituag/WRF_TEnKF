@@ -60,7 +60,7 @@ mkdir $W/letkf && cd $W/letkf
 for m in 1 2 3 4; do cp ../wrf/mem0000$m gs010000$m; done
 cp ../wrf/mem00004 guesemean; cp ../wrf/mem00004 analemean
 ln -s ../syn/rad0101.dat rad0101.dat
-sed -e 's/__NBV__/4/' -e 's/__NRADAR__/1/' -e 's/__NTEMP__/1/' -e 's/__ALPHA_S__/1.0d0/' \
+sed -e 's/__NBV__/4/' -e 's/__NRADAR__/1/' -e 's/__NTEMP__/1/' -e 's/__ALPHA_S__/1.0d0/' -e 's/__TEMP_RELAX_MODE__/1/' \
     $ROOT/namelists/letkf_osse_cap4.namelist > letkf.namelist
 $MPI -n 2 $BIN/letkf.exe > log 2>&1
 grep -q "LETKF ends SUCCESFULLY" NOUT-00000

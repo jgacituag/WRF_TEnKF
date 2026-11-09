@@ -18,7 +18,7 @@ MODULE letkf_tools
   IMPLICIT NONE
 
   PRIVATE
-  PUBLIC ::  das_letkf,gues3d,gues2d,anal3d,anal2d,guesp2d,analp2d
+  PUBLIC ::  das_letkf,gues3d,gues2d,anal3d,anal2d,guesp2d,analp2d,temper_next_gues,temper_final_relax
 
   INTEGER,SAVE :: nobstotal
   INTEGER,SAVE :: var_local_n2n(nv3d+nv2d)
@@ -67,12 +67,30 @@ SUBROUTINE das_letkf
 
   REAL(r_size),ALLOCATABLE :: mean2dg(:,:),mean3dg(:,:,:)
   REAL(r_size),ALLOCATABLE :: meanp2d(:,:)
+  REAL(r_size) :: relax_a,relax_s,minfl_step   !WRF_TEnKF: RTPP, RTPS and minimum inflation of this step
 
 
   WRITE(6,'(A)') 'Hello from das_letkf'
   WRITE(6,'(A,F15.2)') '  cov_infl_mul = ',cov_infl_mul, '  relax_alpha = ' &
                  ,relax_alpha , ' relax_alpha_spread =', relax_alpha_spread
   nobstotal = nobs !+ ntvs
+  !WRF_TEnKF: with ntemp = 1 these are the namelist values. With ntemp > 1
+  !the inflation of each step is cov_infl_mul**temp_alpha(itemp) (and the same
+  !for min_infl_mul), so that the steps together inflate by cov_infl_mul, and
+  !RTPP/RTPS act here only with temp_relax_mode = 2 (every step); with
+  !temp_relax_mode = 1 they act once, in temper_final_relax.
+  relax_a = RELAX_ALPHA
+  relax_s = RELAX_ALPHA_SPREAD
+  minfl_step = MIN_INFL_MUL
+  IF( ntemp > 1 )THEN
+    IF( temp_relax_mode == 1 )THEN
+      relax_a = 0.0d0
+      relax_s = 0.0d0
+    ENDIF
+    IF( MIN_INFL_MUL > 0.0d0 ) minfl_step = MIN_INFL_MUL**temp_alpha(itemp)
+    WRITE(6,'(A,I3,A,F10.6,A,F10.6,A,F10.6)') '  tempering step ',itemp,': alpha = ',temp_alpha(itemp), &
+              '  inflation = ',cov_infl_mul**temp_alpha(itemp),'  RTPP in this step = ',relax_a
+  ENDIF
   WRITE(6,'(A,I8)') 'Target observation numbers : NOBS=',nobs!,', NTVS=',ntvs
   !
   ! In case of no obs
@@ -140,8 +158,13 @@ SUBROUTINE das_letkf
   IF(cov_infl_mul > 0.0d0) THEN ! fixed multiplicative inflation parameter
     ALLOCATE( work3d(nij1,nlev,nv3d) )
     ALLOCATE( work2d(nij1,nv2d) )
-    work3d = cov_infl_mul
-    work2d = cov_infl_mul
+    IF( ntemp > 1 )THEN
+      work3d = cov_infl_mul**temp_alpha(itemp)        !WRF_TEnKF: inflation split among the steps
+      work2d = cov_infl_mul**temp_alpha(itemp)
+    ELSE
+      work3d = cov_infl_mul
+      work2d = cov_infl_mul
+    ENDIF
   END IF
   IF(cov_infl_mul <= 0.0d0) THEN ! 3D parameter values are read-in
     ALLOCATE( workg(nlon,nlat,nlev) )
@@ -189,7 +212,7 @@ SUBROUTINE das_letkf
   !
   ! RTPS relaxation
   !
-  IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN
+  IF(relax_s /= 0.0d0) THEN
     ALLOCATE( work3da(nij1,nlev,nv3d) )
     ALLOCATE( work2da(nij1,nv2d) )
     work3da = 1.0d0
@@ -229,19 +252,19 @@ SUBROUTINE das_letkf
         IF(var_local_n2n(n) < n) THEN
           trans(:,:,n) = trans(:,:,var_local_n2n(n))
           transm(:,n) = transm(:,var_local_n2n(n))                                     !GYL
-          IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                         !GYL
+          IF(relax_s /= 0.0d0) THEN                                         !GYL
             pa(:,:,n) = pa(:,:,var_local_n2n(n))                                       !GYL
           END IF                                                                       !GYL
           work3d(ij,ilev,n) = work3d(ij,ilev,var_local_n2n(n))
         ELSE
           CALL obs_local(ij,ilev,n,hdxf,rdiag,rloc,dep,nobsl,logpfm,zfm)
           parm = work3d(ij,ilev,n)
-          IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                         !GYL
+          IF(relax_s /= 0.0d0) THEN                                         !GYL
             CALL letkf_core(nbv,nobstotal,nobsl,hdxf,rdiag,rloc,dep,parm, &            !GYL
-                            trans(:,:,n),transm=transm(:,n),pao=pa(:,:,n),minfl=MIN_INFL_MUL) !GYL
+                            trans(:,:,n),transm=transm(:,n),pao=pa(:,:,n),minfl=minfl_step) !GYL
           ELSE                                                                         !GYL
             CALL letkf_core(nbv,nobstotal,nobsl,hdxf,rdiag,rloc,dep,parm, &            !GYL
-                            trans(:,:,n),transm=transm(:,n),minfl=MIN_INFL_MUL)        !GYL
+                            trans(:,:,n),transm=transm(:,n),minfl=minfl_step)        !GYL
           END IF                                                                       !GYL
           work3d(ij,ilev,n) = parm
         END IF
@@ -249,9 +272,9 @@ SUBROUTINE das_letkf
            .AND. ilev > LEV_UPDATE_Q) THEN !GYL, do not update upper-level q,qc
           anal3d(ij,ilev,:,n) = mean3dg(ij,ilev,n) + gues3d(ij,ilev,:,n)                !GYL
         ELSE                                                                           !GYL
-          IF(RELAX_ALPHA /= 0.0d0) THEN                                                !GYL - RTPP method (Zhang et al. 2005)
+          IF(relax_a /= 0.0d0) THEN                                                !GYL - RTPP method (Zhang et al. 2005)
             CALL weight_RTPP(trans(:,:,n),transrlx)                                    !GYL
-          ELSE IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                    !GYL - RTPS method (Whitaker and Hamill 2012)
+          ELSE IF(relax_s /= 0.0d0) THEN                                    !GYL - RTPS method (Whitaker and Hamill 2012)
             CALL weight_RTPS(trans(:,:,n),pa(:,:,n),gues3d(ij,ilev,:,n),transrlx,work3da(ij,ilev,n)) !GYL
           ELSE                                                                         !GYL
             transrlx = trans(:,:,n)                                                    !GYL
@@ -272,7 +295,7 @@ SUBROUTINE das_letkf
           IF(var_local_n2n(nv3d+n) < nv3d+n) THEN
             trans(:,:,nv3d+n) = trans(:,:,var_local_n2n(nv3d+n))
             transm(:,nv3d+n) = transm(:,var_local_n2n(nv3d+n))                         !GYL
-            IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                       !GYL
+            IF(relax_s /= 0.0d0) THEN                                       !GYL
               pa(:,:,nv3d+n) = pa(:,:,var_local_n2n(nv3d+n))                           !GYL
             END IF                                                                     !GYL
             IF(var_local_n2n(nv3d+n) <= nv3d) THEN                                     !GYL - correct the bug of the 2d variable update
@@ -283,18 +306,18 @@ SUBROUTINE das_letkf
           ELSE
             CALL obs_local(ij,ilev,n,hdxf,rdiag,rloc,dep,nobsl,logpfm,zfm)
             parm = work2d(ij,n)
-            IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                       !GYL
+            IF(relax_s /= 0.0d0) THEN                                       !GYL
               CALL letkf_core(nbv,nobstotal,nobsl,hdxf,rdiag,rloc,dep,parm, &       !GYL
-                              trans(:,:,nv3d+n),transm=transm(:,nv3d+n),pao=pa(:,:,nv3d+n),minfl=MIN_INFL_MUL) !GYL
+                              trans(:,:,nv3d+n),transm=transm(:,nv3d+n),pao=pa(:,:,nv3d+n),minfl=minfl_step) !GYL
             ELSE                                                                       !GYL
               CALL letkf_core(nbv,nobstotal,nobsl,hdxf,rdiag,rloc,dep,parm, &          !GYL
-                              trans(:,:,nv3d+n),transm=transm(:,nv3d+n),minfl=MIN_INFL_MUL) !GYL
+                              trans(:,:,nv3d+n),transm=transm(:,nv3d+n),minfl=minfl_step) !GYL
             END IF                                                                     !GYL
             work2d(ij,n) = parm
           END IF
-          IF(RELAX_ALPHA /= 0.0d0) THEN                                                !GYL - RTPP method (Zhang et al. 2005)
+          IF(relax_a /= 0.0d0) THEN                                                !GYL - RTPP method (Zhang et al. 2005)
             CALL weight_RTPP(trans(:,:,nv3d+n),transrlx)                               !GYL
-          ELSE IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN                                    !GYL - RTPS method (Whitaker and Hamill 2012)
+          ELSE IF(relax_s /= 0.0d0) THEN                                    !GYL - RTPS method (Whitaker and Hamill 2012)
             CALL weight_RTPS(trans(:,:,nv3d+n),pa(:,:,nv3d+n),gues2d(ij,:,n),transrlx,work2da(ij,n)) !GYL
           ELSE                                                                         !GYL
             transrlx = trans(:,:,nv3d+n)                                               !GYL
@@ -388,7 +411,7 @@ SUBROUTINE das_letkf
 
   DEALLOCATE(hdxf,rdiag,rloc,dep)
 
-  IF(RELAX_ALPHA_SPREAD /= 0.0d0) THEN
+  IF(relax_s /= 0.0d0) THEN
     DEALLOCATE(work3da,work2da)
   END IF
 
@@ -463,6 +486,125 @@ SUBROUTINE das_letkf
   RETURN
 END SUBROUTINE das_letkf
 
+
+!-----------------------------------------------------------------------
+! WRF_TEnKF: prepare the next tempering step. das_letkf leaves anal3d with
+! T as perturbation potential temperature (the wrfout variable) and MU
+! already updated. The next step needs the units of read_grd, so T goes
+! back to temperature with the analysis pressure (the inverse of the last
+! lines of das_letkf), and the result becomes the prior of the next step.
+!-----------------------------------------------------------------------
+SUBROUTINE temper_next_gues
+  IMPLICIT NONE
+  INTEGER :: j
+
+  !$OMP PARALLEL DO SCHEDULE(DYNAMIC) PRIVATE(j)
+  DO j=1,nij1
+    gues3d(j,:,:,:) = anal3d(j,:,:,:)
+    gues3d(j,:,:,iv3d_t) = ( anal3d(j,:,:,iv3d_t) + t0 ) * ( anal3d(j,:,:,iv3d_p) / p0 ) ** (rd / cp)
+  ENDDO
+  !$OMP END PARALLEL DO
+  gues2d = anal2d
+
+  RETURN
+END SUBROUTINE temper_next_gues
+
+!-----------------------------------------------------------------------
+! WRF_TEnKF: relaxation to the prior after the last tempering step
+! (temp_relax_mode = 1). prior3d, prior2d hold the original prior in the
+! units of read_grd. In state space, with the same variables and levels as
+! das_letkf (no relaxation of q above LEV_UPDATE_Q, which das_letkf does
+! not update):
+!   RTPP: xa' <- (1 - relax_alpha) xa' + relax_alpha xb'
+!   RTPS: xa' <- xa' (relax_alpha_spread sb/sa - relax_alpha_spread + 1)
+! The analysis mean does not change. Afterwards, as in das_letkf: moisture
+! and hydrometeors are clipped at zero, MU is diagnosed against the
+! original prior, and T goes back to perturbation potential temperature.
+!-----------------------------------------------------------------------
+SUBROUTINE temper_final_relax(prior3d,prior2d)
+  IMPLICIT NONE
+  REAL(r_size),INTENT(IN) :: prior3d(nij1,nlev,nbv,nv3d)
+  REAL(r_size),INTENT(IN) :: prior2d(nij1,nbv,nv2d)
+  REAL(r_size),ALLOCATABLE :: ma3(:,:,:),ma2(:,:),mb3(:,:,:),mb2(:,:)
+  REAL(r_size) :: sa,sb,f
+  INTEGER :: j,k,n,m
+
+  IF( RELAX_ALPHA == 0.0d0 .AND. RELAX_ALPHA_SPREAD == 0.0d0 ) RETURN
+  IF( RELAX_ALPHA /= 0.0d0 )THEN
+    WRITE(6,'(A,F10.4)') 'Tempering: RTPP after the last step against the original prior, relax_alpha = ',RELAX_ALPHA
+  ELSE
+    WRITE(6,'(A,F10.4)') 'Tempering: RTPS after the last step against the original prior, relax_alpha_spread = ',RELAX_ALPHA_SPREAD
+  ENDIF
+
+  !$OMP PARALLEL DO SCHEDULE(DYNAMIC) PRIVATE(j)
+  DO j=1,nij1
+    anal3d(j,:,:,iv3d_t) = ( anal3d(j,:,:,iv3d_t) + t0 ) * ( anal3d(j,:,:,iv3d_p) / p0 ) ** (rd / cp)
+  ENDDO
+  !$OMP END PARALLEL DO
+
+  ALLOCATE( ma3(nij1,nlev,nv3d),ma2(nij1,nv2d),mb3(nij1,nlev,nv3d),mb2(nij1,nv2d) )
+  CALL ensmean_grd(nbv,nij1,anal3d,anal2d,ma3,ma2)
+  CALL ensmean_grd(nbv,nij1,prior3d,prior2d,mb3,mb2)
+
+  !$OMP PARALLEL DO SCHEDULE(DYNAMIC) PRIVATE(j,k,n,m,sa,sb,f)
+  DO j=1,nij1
+    DO n=1,nv3d
+      DO k=1,nlev
+        IF( (n == iv3d_qv .OR. n == iv3d_qc .OR. n == iv3d_qr .OR. n == iv3d_qci .OR. n == iv3d_qs .OR. n == iv3d_qg) &
+            .AND. k > LEV_UPDATE_Q ) CYCLE
+        IF( RELAX_ALPHA /= 0.0d0 )THEN
+          DO m=1,nbv
+            anal3d(j,k,m,n) = ma3(j,k,n) + (1.0d0 - RELAX_ALPHA) * ( anal3d(j,k,m,n) - ma3(j,k,n) ) &
+                            &            + RELAX_ALPHA * ( prior3d(j,k,m,n) - mb3(j,k,n) )
+          ENDDO
+        ELSE
+          sa = SQRT( SUM( ( anal3d(j,k,:,n) - ma3(j,k,n) )**2 ) / REAL(nbv-1,r_size) )
+          sb = SQRT( SUM( ( prior3d(j,k,:,n) - mb3(j,k,n) )**2 ) / REAL(nbv-1,r_size) )
+          IF( sa > 0.0d0 .AND. sb > 0.0d0 )THEN
+            f = RELAX_ALPHA_SPREAD * sb / sa - RELAX_ALPHA_SPREAD + 1.0d0
+            anal3d(j,k,:,n) = ma3(j,k,n) + f * ( anal3d(j,k,:,n) - ma3(j,k,n) )
+          ENDIF
+        ENDIF
+      ENDDO
+    ENDDO
+    DO n=1,nv2d
+      IF( RELAX_ALPHA /= 0.0d0 )THEN
+        DO m=1,nbv
+          anal2d(j,m,n) = ma2(j,n) + (1.0d0 - RELAX_ALPHA) * ( anal2d(j,m,n) - ma2(j,n) ) &
+                        &          + RELAX_ALPHA * ( prior2d(j,m,n) - mb2(j,n) )
+        ENDDO
+      ELSE
+        sa = SQRT( SUM( ( anal2d(j,:,n) - ma2(j,n) )**2 ) / REAL(nbv-1,r_size) )
+        sb = SQRT( SUM( ( prior2d(j,:,n) - mb2(j,n) )**2 ) / REAL(nbv-1,r_size) )
+        IF( sa > 0.0d0 .AND. sb > 0.0d0 )THEN
+          f = RELAX_ALPHA_SPREAD * sb / sa - RELAX_ALPHA_SPREAD + 1.0d0
+          anal2d(j,:,n) = ma2(j,n) + f * ( anal2d(j,:,n) - ma2(j,n) )
+        ENDIF
+      ENDIF
+    ENDDO
+  ENDDO
+  !$OMP END PARALLEL DO
+  DEALLOCATE( ma3,ma2,mb3,mb2 )
+
+  WHERE( anal3d(:,:,:,iv3d_qr) <= 0.0d0)anal3d(:,:,:,iv3d_qr)=0.0d0
+  WHERE( anal3d(:,:,:,iv3d_qg) <= 0.0d0)anal3d(:,:,:,iv3d_qg)=0.0d0
+  WHERE( anal3d(:,:,:,iv3d_qs) <= 0.0d0)anal3d(:,:,:,iv3d_qs)=0.0d0
+  WHERE( anal3d(:,:,:,iv3d_qc) <= 0.0d0)anal3d(:,:,:,iv3d_qc)=0.0d0
+  WHERE( anal3d(:,:,:,iv3d_qci) <= 0.0d0)anal3d(:,:,:,iv3d_qci)=0.0d0
+  WHERE( anal3d(:,:,:,iv3d_qv) <= 0.0d0)anal3d(:,:,:,iv3d_qv)=0.0d0
+
+  gues3d = prior3d
+  gues2d = prior2d
+  CALL UPDATE_MU()
+
+  !$OMP PARALLEL DO SCHEDULE(DYNAMIC) PRIVATE(j)
+  DO j=1,nij1
+     anal3d(j,:,:,iv3d_t)  = anal3d(j,:,:,iv3d_t) *(p0 /  anal3d(j,:,:,iv3d_p)) ** (rd / cp) - t0
+  ENDDO
+  !$OMP END PARALLEL DO
+
+  RETURN
+END SUBROUTINE temper_final_relax
 
 !-----------------------------------------------------------------------
 ! Compute update in MU

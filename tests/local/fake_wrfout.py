@@ -71,7 +71,12 @@ def write_member(path, imem, rng):
     var("U", ("Time", "bottom_top", "south_north", "west_east_stag"), np.zeros((1, NZ, NY, NX + 1)))
     var("V", ("Time", "bottom_top", "south_north_stag", "west_east"), np.zeros((1, NZ, NY + 1, NX)))
     var("W", ("Time", "bottom_top_stag", "south_north", "west_east"), np.zeros((1, NZ + 1, NY, NX)))
-    var("T", m3, np.zeros((1, NZ, NY, NX)))
+    # Potential temperature perturbation: a smooth blob of random amplitude,
+    # so that temperature observations see ensemble spread.
+    tamp = rng.normal(0.0, 1.0)
+    rt2 = ((ii - NX / 3) ** 2 + (jj - NY / 3) ** 2) / 8.0 ** 2
+    tvert = np.exp(-((zm - 1500.0) / 1500.0) ** 2)
+    var("T", m3, (tamp * np.exp(-rt2))[None, None, :, :] * tvert[None, :, None, None])
     var("P", m3, np.zeros((1, NZ, NY, NX)))
     var("PB", m3, np.broadcast_to(pb[None, :, None, None], (1, NZ, NY, NX)))
     w3 = ("Time", "bottom_top_stag", "south_north", "west_east")

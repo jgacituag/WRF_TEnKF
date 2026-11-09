@@ -50,6 +50,29 @@ Weights follow the exponential scheme w_i ∝ exp(−α_s (Nt+1)/i),
 normalized to sum to one. α_s = 0 gives equal weights; larger α_s moves
 the weight to the last steps.
 
+How each step works (`src/letkf/letkf.f90`):
+
+- Step 1 is the original LETKF with R/α_1: `set_letkf_obs` reads the
+  observations, applies the quality control and H(x).
+- Steps 2..Nt keep the observations, their quality control and their
+  order from step 1. `set_letkf_obs_temp` gathers the previous analysis
+  member by member in memory (`gather_ens_mpi_alltoall`, the
+  communication of `write_ens_mpi_alltoall` without the files) and
+  recomputes H(x) and the departures. An observation the operator cannot
+  evaluate at a step (it left the vertical domain, say) has no effect in
+  that step.
+- Moisture and hydrometeors are clipped at zero after every step, and MU
+  is updated against that step's prior, as in the original code.
+- Fixed multiplicative inflation ρ is split among the steps: step i uses
+  ρ^α_i, so the steps together inflate by ρ (the same for
+  `min_infl_mul`). Adaptive inflation is not supported with Nt > 1.
+- RTPP/RTPS: `temp_relax_mode = 1` (default) relaxes once, after the last
+  step, against the original prior, in state space; `temp_relax_mode = 2`
+  relaxes at every step against that step's prior (the original code in
+  weight space).
+- Nt > 1 requires one time slot (`nslots = 1`) and no parameter
+  estimation.
+
 ## Namelist
 
 ```
@@ -57,6 +80,7 @@ the weight to the last steps.
   ntemp   = 1        ! 1 = original LETKF
   alpha_s = 1.0d0    ! delay parameter of the exponential weights
   alpha_list = ...   ! optional explicit weights (override alpha_s)
+  temp_relax_mode = 1  ! RTPP/RTPS: 1 = once after the last step, 2 = every step
 /
 ```
 
@@ -129,6 +153,13 @@ from the source.
 - `tests/local/test_osse_tools.sh` runs the chain on small synthetic
   wrfout files on a workstation (needs numpy and netCDF4; nothing of it
   runs on the cluster).
+- `tests/local/test_tempering.sh [BASE]` checks the tempering loop on the
+  same synthetic files: (A) `ntemp = 1` bit for bit against revision BASE,
+  with and without inflation, RTPP and RTPS; (B) with temperature
+  observations, global localization and no inflation, where tempering is
+  exact algebra, `ntemp = 2` and `4` reproduce the single-step analysis
+  (to single precision); (C) reflectivity with `ntemp = 3` in every RTPP
+  mode.
 
 ## Use with wrfutil
 
@@ -141,5 +172,5 @@ from compute nodes (wrfout) need striping, `lfs setstripe -c 8 <dir>`.
 `wrfutil_hydra` stays unchanged. In the experiment configuration, point
 `LETKFDIR` to a directory holding `dist/letkf_<COMPILER>.tar` renamed to
 `letkf.tar`, `NAMELISTDIR` to `namelists/`, and use `bin/run_LETKF.sh`.
-Set `NTEMP` and `ALPHA_S` in `letkf.conf`; if they are unset, the script
-writes `ntemp = 1`.
+Set `NTEMP`, `ALPHA_S` and `TEMP_RELAX_MODE` in `letkf.conf`; if they
+are unset, the script writes `ntemp = 1`.

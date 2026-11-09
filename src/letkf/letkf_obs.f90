@@ -640,6 +640,127 @@ END SUBROUTINE set_letkf_obs
 
 
 !-----------------------------------------------------------------------
+! WRF_TEnKF: observation operator for tempering steps 2..ntemp.
+! The observations, their quality control and their order are those of
+! step 1 (set_letkf_obs); only H(x) changes. v3d and v2d hold the current
+! ensemble, distributed by grid points, in the units read_grd gives (T as
+! temperature; P, PH and MU as full fields). The vertical position of each
+! observation and H(x) follow set_letkf_obs, and reflectivity goes to dBZ
+! as in process_radar_obs. Overwrites obshdxf (perturbations of H(x)) and
+! obsdep (y minus the mean of H(x)). An observation that the operator
+! cannot evaluate for some member at this step (it left the vertical
+! domain, for instance) gets obshdxf = 0 and obsdep = 0, so it does not
+! act in this step.
+!-----------------------------------------------------------------------
+SUBROUTINE set_letkf_obs_temp(v3d,v2d)
+  IMPLICIT NONE
+  REAL(r_size),INTENT(IN) :: v3d(nij1,nlev,nbv,nv3d)
+  REAL(r_size),INTENT(IN) :: v2d(nij1,nbv,nv2d)
+  REAL(r_sngl),ALLOCATABLE :: v3dg(:,:,:,:),v2dg(:,:,:)
+  REAL(r_size),ALLOCATABLE :: v3dm(:,:,:,:),v2dm(:,:,:),zmodel(:,:,:)
+  REAL(r_size),ALLOCATABLE :: hdxf(:,:),sprd(:)
+  REAL(r_size) :: rk,dz,yobs,odat,otyp,hmean
+  INTEGER :: n,i,l,ll,im,ielm,nskip,ierr
+
+  WRITE(6,'(A,I3)') 'Hello from set_letkf_obs_temp, tempering step ',itemp
+  ALLOCATE( hdxf(MAX(nobs,1),nbv) )
+  hdxf = 0.0d0
+
+  ll = CEILING(REAL(nbv)/REAL(nprocs))
+  DO l=1,ll
+    CALL gather_ens_mpi_alltoall(nbv,l,v3d,v2d,v3dg,v2dg,im)
+    IF( im > 0 )THEN
+      ALLOCATE( v3dm(nlon,nlat,nlev,nv3d),v2dm(nlon,nlat,nv2d),zmodel(nlon,nlat,nlev) )
+      v3dm = REAL(v3dg,r_size)
+      v2dm = REAL(v2dg,r_size)
+      DEALLOCATE( v3dg,v2dg )
+      zmodel = v3dm(:,:,:,iv3d_ph)/gg
+!$OMP PARALLEL DO SCHEDULE(DYNAMIC) PRIVATE(n,ielm,rk,dz,yobs,odat,otyp)
+      DO n=1,nobs
+        hdxf(n,im) = undef
+        ielm = NINT(obselm(n))
+        IF( obsradar(n) > 0.0d0 )THEN
+          CALL z2k_fast(zmodel,obsi(n),obsj(n),obslev(n),rk)
+        ELSE
+          CALL p2k(v3dm(:,:,:,iv3d_p),obselm(n),obsi(n),obsj(n),obslev(n),rk)
+        ENDIF
+        IF( CEILING(rk) > nlev-1 ) CYCLE
+        IF( CEILING(rk) < 2 .AND. ielm /= id_ps_obs )THEN
+          IF( ielm == id_u_obs .OR. ielm == id_v_obs )THEN
+            rk = 1.00001d0
+          ELSE IF( ielm > 9999 )THEN
+            rk = 0.0d0
+          ELSE
+            CYCLE
+          ENDIF
+        ENDIF
+        IF( ielm == id_ps_obs )THEN
+          CALL itpl_2d(phi0,obsi(n),obsj(n),dz)
+          rk = obslev(n) - dz
+        ENDIF
+        IF( ielm == id_ts_obs .OR. ielm == id_qs_obs .OR. ielm == id_rhs_obs .OR. &
+            ielm == id_us_obs .OR. ielm == id_vs_obs )THEN
+          CALL itpl_2d(phi0,obsi(n),obsj(n),dz)
+          rk = obslev(n) - dz
+        ENDIF
+        odat = obsdat(n)
+        otyp = obstyp(n)
+        CALL Trans_XtoY(obselm(n),otyp,obslon(n),obslat(n),odat,obsi(n),obsj(n),rk,&
+         & obsaz(n),obsel(n),v3dm,v2dm,yobs)
+        hdxf(n,im) = yobs
+      END DO
+!$OMP END PARALLEL DO
+      DEALLOCATE( v3dm,v2dm,zmodel )
+    ENDIF
+  END DO
+
+  CALL MPI_BARRIER(MPI_COMM_WORLD,ierr)
+  IF( nobs > 0 ) CALL allreduce_obs_mpi(nobs,nbv,hdxf)
+
+  nskip = 0
+  DO n=1,nobs
+    IF( ANY( hdxf(n,:) == undef ) )THEN
+      obshdxf(n,:) = 0.0d0
+      obsdep(n) = 0.0d0
+      nskip = nskip + 1
+      CYCLE
+    ENDIF
+    IF( NINT(obselm(n)) == id_reflectivity_obs )THEN
+      DO i=1,nbv
+        IF( hdxf(n,i) > minref )THEN
+          hdxf(n,i) = 10*log10(hdxf(n,i))
+        ELSEIF( hdxf(n,i) < minref )THEN
+          hdxf(n,i) = minrefdbz
+        ENDIF
+      END DO
+    ENDIF
+    hmean = 0.0d0
+    DO i=1,nbv
+      hmean = hmean + hdxf(n,i)
+    END DO
+    hmean = hmean / REAL(nbv,r_size)
+    DO i=1,nbv
+      obshdxf(n,i) = hdxf(n,i) - hmean
+    END DO
+    obsdep(n) = obsdat(n) - hmean
+  END DO
+
+  WRITE(6,'(A,I3,A,I10,A,I10,A)') 'TEMPERING STEP ',itemp,': ',nobs,' observations, ',nskip, &
+                                 ' without H(x) for some member (no effect in this step)'
+  IF( nobs > 0 )THEN
+    ALLOCATE( sprd(nobs) )
+    DO n=1,nobs
+      CALL com_stdev(nbv,obshdxf(n,:),sprd(n))
+    END DO
+    CALL monit_dep(nobs,obselm,obsdep,sprd)
+    DEALLOCATE( sprd )
+  ENDIF
+  DEALLOCATE( hdxf )
+
+  RETURN
+END SUBROUTINE set_letkf_obs_temp
+
+!-----------------------------------------------------------------------
 ! Process radar obs
 ! This subroutine performs some additional computations based on input radar
 ! observations.

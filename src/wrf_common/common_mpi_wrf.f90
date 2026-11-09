@@ -877,6 +877,96 @@ END SUBROUTINE write_ens_mpi_alltoall
 
 
 !-----------------------------------------------------------------------
+! WRF_TEnKF: gather block l of an ensemble distributed by grid points,
+! v3d(nij1,nlev,member,nv3d), into full fields on the rank that
+! write_ens_mpi_alltoall uses to write each member (the same rank that
+! set_letkf_obs uses to apply the observation operator to it). Same
+! buffers and communication as write_ens_mpi_alltoall, without the file.
+! On a receiving rank im is the member index and v3dg, v2dg are allocated
+! and filled; on the other ranks im = 0 and v3dg, v2dg stay unallocated.
+! Collective: every rank calls it for every block l.
+!-----------------------------------------------------------------------
+SUBROUTINE gather_ens_mpi_alltoall(member,l,v3d,v2d,v3dg,v2dg,im)
+  IMPLICIT NONE
+  INTEGER,INTENT(IN) :: member,l
+  REAL(r_size),INTENT(IN) :: v3d(nij1,nlev,member,nv3d)
+  REAL(r_size),INTENT(IN) :: v2d(nij1,member,nv2d)
+  REAL(r_sngl),ALLOCATABLE,INTENT(INOUT) :: v3dg(:,:,:,:)
+  REAL(r_sngl),ALLOCATABLE,INTENT(INOUT) :: v2dg(:,:,:)
+  INTEGER,INTENT(OUT) :: im
+  REAL(r_sngl),ALLOCATABLE :: bufs(:,:,:)
+  REAL(r_sngl),ALLOCATABLE :: bufr(:,:,:)
+  INTEGER :: k,n,j,m,mcount,mstart,mend,skip,ierr,p
+  INTEGER :: ns(nprocs),nst(nprocs),nr(nprocs),nrt(nprocs)
+  LOGICAL :: receiver
+
+  IF(ALLOCATED(v3dg)) DEALLOCATE(v3dg)
+  IF(ALLOCATED(v2dg)) DEALLOCATE(v2dg)
+  im = 0
+  skip = FLOOR( REAL(nprocs) / REAL(member) )
+  IF( skip == 0 ) skip = 1
+  mstart = 1 + (l-1)*nprocs
+  mend = MIN(l*nprocs, member)
+  mcount = mend - mstart + 1
+  IF(mcount > nprocs .OR. mcount <= 0) STOP
+  receiver = MOD( myrank + 1 , skip ) == 0 .AND. (myrank+1)/skip <= mcount
+
+  ALLOCATE( bufs(nij1max,nlevall,mcount) )
+  bufs = 0.0
+  DO m = mstart,mend
+    j=0
+    DO n=1,nv3d
+      DO k=1,nlev
+        j = j+1
+        bufs(1:nij1,j,m-mstart+1) = REAL(v3d(:,k,m,n),r_sngl)
+      END DO
+    END DO
+    DO n=1,nv2d
+      j = j+1
+      bufs(1:nij1,j,m-mstart+1) = REAL(v2d(:,m,n),r_sngl)
+    END DO
+  END DO
+  nr  = 0
+  nrt = 0
+  ns  = 0
+  nst = 0
+  DO p=1,mcount
+    ns(p*skip) = nij1max*nlevall
+  ENDDO
+  IF( receiver )THEN
+    ALLOCATE( bufr(nij1max,nlevall,nprocs) )
+    nr(:) = nij1max*nlevall
+  ELSE
+    ALLOCATE( bufr(1,1,1) )
+  END IF
+  DO p=2,nprocs
+    nrt(p) = nrt(p-1) + nr(p-1)
+    nst(p) = nst(p-1) + ns(p-1)
+  END DO
+  CALL MPI_ALLTOALLV(bufs, ns, nst, MPI_REAL, &
+                     bufr, nr, nrt, MPI_REAL, MPI_COMM_WORLD, ierr)
+  DEALLOCATE( bufs )
+  IF( receiver )THEN
+    ALLOCATE( v3dg(nlon,nlat,nlev,nv3d) , v2dg(nlon,nlat,nv2d) )
+    j=0
+    DO n=1,nv3d
+      DO k=1,nlev
+        j = j+1
+        CALL buf_to_grd(bufr(:,j,:),v3dg(:,:,k,n))
+      END DO
+    END DO
+    DO n=1,nv2d
+      j = j+1
+      CALL buf_to_grd(bufr(:,j,:),v2dg(:,:,n))
+    END DO
+    im = (myrank+1)/skip + (l-1)*nprocs
+  END IF
+  DEALLOCATE( bufr )
+
+  RETURN
+END SUBROUTINE gather_ens_mpi_alltoall
+
+!-----------------------------------------------------------------------
 ! gridded data -> buffer
 !-----------------------------------------------------------------------
 SUBROUTINE grd_to_buf(grd,buf)
