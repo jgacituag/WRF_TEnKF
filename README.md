@@ -120,6 +120,12 @@ from the source.
   forecasts from a given set of analyses, reusing the scripts, namelists,
   WRF executables and met_em of an existing experiment (copied or linked,
   never modified). `--dry-run` checks every input first.
+- `osse/make_da_exp.sh` builds a wrfutil DA-cycle experiment that repeats
+  an existing one over a new period (same scripts, namelists, executables,
+  GEFS boundaries and radar data; only the dates, `BASEDIR` and
+  `EXPTYPE=DACYCLE` change). `--dry-run` checks the executables, the GEFS
+  files of every step and the radar files; `--smoke` makes a 4-member,
+  8-node version for a check in the interactive group.
 - `tests/local/test_osse_tools.sh` runs the chain on small synthetic
   wrfout files on a workstation (needs numpy and netCDF4; nothing of it
   runs on the cluster).
