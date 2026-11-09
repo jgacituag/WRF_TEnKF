@@ -76,6 +76,7 @@ BDY_INI_FREQ=$(confval $SRC/conf/exp.conf BDY_INI_FREQ)
 WPS_CYCLE=$(confval $SRC/conf/exp.conf WPS_CYCLE)
 BDYPATH=$(confval $SRC/conf/exp.conf BDYPATH)
 BDYPREFIX=$(confval $SRC/conf/exp.conf BDYPREFIX)
+BDYVTABLE=$(confval $SRC/conf/exp.conf BDYVTABLE)
 SRC_SOURCE=$(confval $SRC/conf/exp.conf WPS_DATA_SOURCE)
 if [ $SMOKE -eq 1 ]; then
   BMI=001 ; BME=004 ; TMI=001 ; TME=004 ; INODE=8 ; WRFNODE=2 ; TLIM=${TLIM:-00:30:00} ; INTER=1
@@ -106,7 +107,7 @@ for d in bin lib conf NAMELIST WRF/code WPS/code PERT/code LETKF/code; do
 done
 for f in WRF/code/real.exe WRF/code/wrf.exe WRF/code/da_update_bc.exe WPS/code/ungrib.exe \
          WPS/code/metgrid.exe PERT/code/pert_met_em.exe LETKF/code/letkf.exe \
-         LETKF/code/update_wrf_time.exe WPS/geogrid/geo_em.d01.nc; do
+         LETKF/code/update_wrf_time.exe WPS/geogrid/geo_em.d01.nc WPS/$BDYVTABLE; do
   check "present $f" test -e $SRC/$f
 done
 for f in bin/main_ASIM.sh bin/run_WPS.sh bin/run_Pert.sh bin/run_ensfcst.sh bin/run_LETKF.sh \
@@ -168,6 +169,7 @@ cat <<EOF
   conf/machine.conf: INODE=$INODE  WRFNODE=$WRFNODE  TOTAL_TIME_LIMIT="$TLIM"  INTERACTIVE_JOB=$INTER
   WRF/code, WPS/code, PERT/code, LETKF/code: links to the files of $SRC (namelists excluded)
   WPS/geogrid/geo_em.d01.nc -> $SRC/WPS/geogrid/
+  WPS/Vtable* -> $SRC/WPS/ (ungrib reads \$WPSDIR/\$BDYVTABLE = $BDYVTABLE)
 EOF
 
 if [ $DRY -eq 1 ]; then
@@ -192,6 +194,7 @@ for d in WRF/code WPS/code PERT/code LETKF/code; do
   done
 done
 ln -s $SRC/WPS/geogrid/geo_em.d01.nc $NEW/WPS/geogrid/
+ln -s $SRC/WPS/Vtable* $NEW/WPS/          #run_WPS.sh links \$WPSDIR/\$BDYVTABLE as the ungrib Vtable
 stripe () { if command -v lfs > /dev/null ; then lfs setstripe -c ${2:-8} $1 ; fi ; }
 stripe $NEW/HIST/ANAL ; stripe $NEW/HIST/GUES ; stripe $NEW/HIST/WPS 4 ; mkdir -p $NEW/WRF && stripe $NEW/WRF 4
 
