@@ -19,9 +19,20 @@
 #             linked as NEW_EXP/HIST/ANAL/<YYYYmmddHHMMSS>
 #   INODE     nodes for the job (default 240: 30 members of 8 nodes at a
 #             time, which keeps the job in the "small" resource group)
+#   --time HH:MM:SS  job time limit (default 02:00:00)
 #
 # Boundary options (lateral boundaries come from met_em files):
 #   (none)                    use SRC_EXP/HIST/WPS/met_em through EXTWPSPATH.
+#   --gefs                    as the source DA experiment did: WPS from GEFS
+#                             and pert_met_em inside the job (RUN_WPS=1,
+#                             BDY_PERT and the boundary/target members of
+#                             SRC_EXP, which must be a GFS experiment such as
+#                             one built by make_da_exp.sh). pert_met_em needs
+#                             the whole target ensemble, so MEM_INI..MEM_END
+#                             must be the target members of SRC_EXP (for the
+#                             OSSE, member 060 is the truth: its "analysis" is
+#                             its guess). Same random seed and inputs as the DA
+#                             run, so the same perturbed boundaries.
 #   --bdy-from-anal ANAL_ROOT run WPS inside the job on wrfouts linked from
 #                             ANAL_ROOT/<YYYYmmddHHMMSS>/anal<MEM> (each member
 #                             takes its boundaries from its own analyses):
@@ -60,13 +71,15 @@
 # group is close to its inode limit.
 #=======================================================================
 set -e
-DRY=0 ; BDYMODE=src ; BDYARG=""
+DRY=0 ; BDYMODE=src ; BDYARG="" ; TLIM=02:00:00
 W2W=$(cd "$(dirname "$0")/.." && pwd)/build/FUJITSU_FUGAKU/wrf_to_wps.exe
 while [[ "$1" == --* ]]; do
   case $1 in
     --dry-run)       DRY=1 ; shift ;;
     --bdy-from-anal) BDYMODE=anal ; BDYARG=$(readlink -f "$2") ; shift 2 ;;
     --met-em-links)  BDYMODE=links ; BDYARG=$(readlink -f "$2") ; shift 2 ;;
+    --gefs)          BDYMODE=gefs ; shift ;;
+    --time)          TLIM=$2 ; shift 2 ;;
     --wrf-to-wps)    W2W=$(readlink -f "$2") ; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
@@ -93,8 +106,11 @@ check () {   # $1 = description, $2... = test
 confval () { # $1 = file, $2 = variable: first numeric value assigned
   grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/.*$2=['\"]?([0-9]*).*/\1/"
 }
+confstr () { # $1 = file, $2 = variable: first value assigned, quotes and comment removed
+  grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/^ *(export +)?$2=//; s/[[:space:]]+#.*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+}
 
-TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.stdin.* --exclude=__pycache__ --exclude=nohup.out"
+TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.* --exclude=__pycache__ --exclude=nohup.out"
 echo "== Checks"
 for d in bin lib conf NAMELIST WRF/code; do
   check "readable $SRC/$d" test -r $SRC/$d -a -x $SRC/$d
@@ -103,7 +119,7 @@ check "real.exe, wrf.exe, da_update_bc.exe in WRF/code" \
       test -e $SRC/WRF/code/real.exe -a -e $SRC/WRF/code/wrf.exe -a -e $SRC/WRF/code/da_update_bc.exe
 check "main_FCST.sh handles EXTWPSPATH" grep -q EXTWPSPATH $SRC/bin/main_FCST.sh
 UNREADABLE=$(cd $SRC && find bin lib conf NAMELIST \( -name '*.out' -o -name '*.err' -o -name '*.stats' \
-              -o -name '.stdin.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
+              -o -name '.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
 [ -n "$UNREADABLE" ] && echo "$UNREADABLE" | sed 's/^/        unreadable /'
 check "every file to copy from bin, lib, conf, NAMELIST is readable" test -z "$UNREADABLE"
 for f in bin/main_FCST.sh bin/run_ensfcst.sh bin/run_WPS.sh lib/timeutils.sh lib/encolarPJM.sh; do
@@ -162,6 +178,30 @@ anal)
   done; done
   check "boundary analyses ($(echo $BDY_DATES | wc -w) times x $(echo $MEMS | wc -w) members) in $BDYARG" test $nmiss -eq 0
   ;;
+gefs)
+  check "source experiment takes boundaries from GFS/GEFS" test "$(confstr $SRC/conf/exp.conf WPS_DATA_SOURCE)" == "GFS"
+  TMI=$(confstr $SRC/conf/exp.conf MEM_INI_TAR) ; TME=$(confstr $SRC/conf/exp.conf MEM_END_TAR)
+  BMI=$(confstr $SRC/conf/exp.conf BDY_MEM_INI) ; BME=$(confstr $SRC/conf/exp.conf BDY_MEM_END)
+  check "forecast members $MEM_INI-$MEM_END are the target members of the source ($TMI-$TME)" \
+        test "$MEM_INI" == "$TMI" -a "$MEM_END" == "$TME"
+  for f in WPS/code/ungrib.exe WPS/code/metgrid.exe PERT/code/pert_met_em.exe WPS/geogrid/geo_em.d01.nc \
+           WPS/$(confstr $SRC/conf/exp.conf BDYVTABLE); do
+    check "present $f" test -e $SRC/$f
+  done
+  BDYPATH=$(confstr $SRC/conf/exp.conf BDYPATH) ; BDYPREFIX=$(confstr $SRC/conf/exp.conf BDYPREFIX)
+  ib=$(date -u -d "${INI_BDY_TAG:0:8} ${INI_BDY_TAG:8:2}:00 UTC" +%s)
+  nmiss=0 ; nfiles=0
+  for d in $BDY_DATES; do
+    td=$(date -u -d "${d:0:8} ${d:8:2}:${d:10:2} UTC" +%s)
+    fh=$(printf %03d $(( (td - ib) / 3600 )))
+    for m in $(seq -f %03g $((10#$BMI)) $((10#$BME))); do
+      f=$(ls $BDYPATH/gefs.${INI_BDY_TAG:0:8}/${INI_BDY_TAG:8:2}/$BDYPREFIX/$m/g*pgrb2*.f$fh 2>/dev/null | head -1)
+      if [ -n "$f" ] && [ -r "$f" ]; then nfiles=$((nfiles+1)); else
+        echo "        missing $BDYPATH/gefs.${INI_BDY_TAG:0:8}/${INI_BDY_TAG:8:2}/$BDYPREFIX/$m/g*pgrb2*.f$fh"; nmiss=$((nmiss+1)); fi
+    done
+  done
+  check "GEFS files for the forecast ($nfiles found)" test $nmiss -eq 0
+  ;;
 links)
   nmiss=0
   for d in $BDY_DATES; do for m in $MEMS; do
@@ -173,10 +213,11 @@ links)
 esac
 
 echo "== Configuration changes"
+if [ $BDYMODE == gefs ]; then PERTLINE="(boundary/target members and BDY_PERT of the source)"
+else PERTLINE="RUN_BDY_PERT=0  BDY_PERT=0  BDY_MEM_INI=$MEM_INI  BDY_MEM_END=$MEM_END"; fi
 cat <<EOF
   conf/config.env  : BASEDIR=$NEWABS/
-  conf/exp.conf    : EXPTYPE=DAFCST  RUN_BDY_PERT=0  BDY_PERT=0  RUN_LETKF=0  RUN_FCST=1
-                     BDY_MEM_INI=$MEM_INI  BDY_MEM_END=$MEM_END
+  conf/exp.conf    : EXPTYPE=DAFCST  INI_STEP=0  RUN_LETKF=0  RUN_FCST=1  $PERTLINE
                      FCST_INI_DATE=FCST_END_DATE='$INIT'  FCST_INI_FREQ=300
                      FCST_LEAD_TIME=$LEAD  FCST_OFREQ=300
 EOF
@@ -187,11 +228,13 @@ case $BDYMODE in
          echo "  WPS/code/* -> $SRC/WPS/code/* except wrf_to_wps.exe -> $W2W"
          echo "  WPS/geogrid/geo_em.d01.nc -> $SRC/WPS/geogrid/"
          echo "  conf/model.conf  : METLEV=$((METLEV_SRC+1))" ;;
+  gefs)  echo "                     RUN_WPS=1  EXTWPSPATH=''  (WPS from GEFS and pert_met_em in the job)"
+         echo "  WPS/code, PERT/code: links to $SRC (namelists excluded); WPS/Vtable*, geo_em linked" ;;
   links) echo "                     RUN_WPS=0  EXTWPSPATH=$NEWABS/BDY_MET_EM"
          echo "  BDY_MET_EM/$INI_BDY_TAG/<MEM>/met_em.d01.<date>.nc -> files under $BDYARG" ;;
 esac
 cat <<EOF
-  conf/machine.conf: INODE=$INODE  TOTAL_TIME_LIMIT=02:00:00
+  conf/machine.conf: INODE=$INODE  TOTAL_TIME_LIMIT=$TLIM
   HIST/ANAL/$INIT_TAG -> $ANAL_DIR
   WRF/code/*  -> $SRC/WRF/code/*
 EOF
@@ -226,19 +269,22 @@ setvar () {  # $1 = file, $2 = variable, $3 = value (written verbatim)
 }
 setvar $NEW/conf/config.env  BASEDIR         "$NEW/"
 setvar $NEW/conf/exp.conf    EXPTYPE         '"DAFCST"'
-setvar $NEW/conf/exp.conf    RUN_BDY_PERT    0
-setvar $NEW/conf/exp.conf    BDY_PERT        0
+setvar $NEW/conf/exp.conf    INI_STEP        0      #the source may hold a restart step
 setvar $NEW/conf/exp.conf    RUN_LETKF       0
 setvar $NEW/conf/exp.conf    RUN_FCST        1
-setvar $NEW/conf/exp.conf    BDY_MEM_INI     $MEM_INI
-setvar $NEW/conf/exp.conf    BDY_MEM_END     $MEM_END
+if [ $BDYMODE != gefs ]; then
+  setvar $NEW/conf/exp.conf  RUN_BDY_PERT    0
+  setvar $NEW/conf/exp.conf  BDY_PERT        0
+  setvar $NEW/conf/exp.conf  BDY_MEM_INI     $MEM_INI
+  setvar $NEW/conf/exp.conf  BDY_MEM_END     $MEM_END
+fi
 setvar $NEW/conf/exp.conf    FCST_INI_DATE   "'$INIT'"
 setvar $NEW/conf/exp.conf    FCST_END_DATE   "'$INIT'"
 setvar $NEW/conf/exp.conf    FCST_INI_FREQ   300
 setvar $NEW/conf/exp.conf    FCST_LEAD_TIME  $LEAD
 setvar $NEW/conf/exp.conf    FCST_OFREQ      300
 setvar $NEW/conf/machine.conf INODE          $INODE
-setvar $NEW/conf/machine.conf TOTAL_TIME_LIMIT '"02:00:00"'
+setvar $NEW/conf/machine.conf TOTAL_TIME_LIMIT "\"$TLIM\""
 
 case $BDYMODE in
 src)
@@ -265,6 +311,21 @@ anal)
   stripe $NEW/HIST/WPS/met_em_ori 4
   stripe $NEW/WPS 4         #intermediate files of wrf_to_wps
   ;;
+gefs)
+  setvar $NEW/conf/exp.conf RUN_WPS    1
+  setvar $NEW/conf/exp.conf EXTWPSPATH '""'
+  for d in WPS/code PERT/code; do
+    mkdir -p $NEW/$d
+    for f in $SRC/$d/*; do
+      case $(basename $f) in *namelist*) continue ;; esac   #the run scripts cp over namelists
+      ln -s $(readlink -f $f) $NEW/$d/
+    done
+  done
+  mkdir -p $NEW/WPS/geogrid $NEW/HIST/WPS $NEW/PERT
+  ln -s $(readlink -f $SRC/WPS/geogrid/geo_em.d01.nc) $NEW/WPS/geogrid/
+  for f in $SRC/WPS/Vtable*; do ln -s $(readlink -f $f) $NEW/WPS/; done
+  stripe $NEW/HIST/WPS 4
+  ;;
 links)
   setvar $NEW/conf/exp.conf RUN_WPS    0
   setvar $NEW/conf/exp.conf EXTWPSPATH "\"$NEW/BDY_MET_EM\""
@@ -284,7 +345,7 @@ cat > $NEW/clean_work.sh <<EOF
 # Remove the work directories of this experiment (made by make_fcst_exp.sh).
 # Keeps HIST/ (forecasts, met_em_ori) and LOGS/.
 cd $NEW || exit 1
-rm -rf WRF/[0-9][0-9][0-9] WPS/[0-9][0-9][0-9] PROCS/*
+rm -rf WRF/[0-9][0-9][0-9] WPS/[0-9][0-9][0-9] PERT/[0-9][0-9] PROCS/*
 echo "Removed work directories under $NEW/WRF and $NEW/WPS"
 EOF
 chmod +x $NEW/clean_work.sh
