@@ -18,7 +18,7 @@
 #   SPIN_UP_LENGTH  [s], default: the value in SRC_EXP/conf/exp.conf
 #
 #   --smoke      4 members (BDY 001-004 -> target 001-004), INODE=8,
-#                WRFNODE=2, TOTAL_TIME_LIMIT=00:30:00, interactive job:
+#                WRFNODE=2, NITER=1, TOTAL_TIME_LIMIT=00:30:00, interactive job:
 #                a quick check of the whole chain in the "int" group.
 #   --time       job time limit (default 24:00:00; 00:30:00 with --smoke)
 #
@@ -225,6 +225,10 @@ setvar $NEW/conf/machine.conf INODE           $INODE
 setvar $NEW/conf/machine.conf WRFNODE         $WRFNODE
 setvar $NEW/conf/machine.conf TOTAL_TIME_LIMIT "\"$TLIM\""
 setvar $NEW/conf/machine.conf INTERACTIVE_JOB $INTER
+#pert_met_em computes the members in NITER batches of ceil(nbv_tar/NITER)
+#and runs past nbv_tar when NITER > nbv_tar (10 in the source, 4 members
+#in the smoke test): a single batch is the same computation.
+[ $SMOKE -eq 1 ] && setvar $NEW/conf/exp.conf NITER 1
 
 echo "== Changed lines"
 grep -h "make_da_exp.sh" $NEW/conf/*.conf $NEW/conf/config.env | sed 's/   # set by.*//; s/^/  /'
