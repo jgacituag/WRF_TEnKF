@@ -150,6 +150,15 @@ from the source.
   `EXPTYPE=DACYCLE` change). `--dry-run` checks the executables, the GEFS
   files of every step and the radar files; `--smoke` makes a 4-member,
   8-node version for a check in the interactive group.
+- `osse/osse_letkf.sh` runs one OSSE analysis inside a job: copies the
+  guesses of a DA run (never writes into it), synthetic reflectivity from
+  the truth member, LETKF with the requested tempering; writes the
+  analyses under the original member numbers plus a copy of the truth
+  guess. `osse/jobs/osse_letkf_fugaku.sh` is the PJM job that runs it for
+  a list of `ntemp` values. `make_fcst_exp.sh --gefs` then runs the
+  forecasts of all members (the truth included) with WPS from GEFS and
+  the perturbation of the DA run; `osse/link_gues_as_anal.sh` prepares
+  the control forecast without DA.
 - `tests/local/test_osse_tools.sh` runs the chain on small synthetic
   wrfout files on a workstation (needs numpy and netCDF4; nothing of it
   runs on the cluster).
