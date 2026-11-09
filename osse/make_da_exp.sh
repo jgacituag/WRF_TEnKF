@@ -65,7 +65,7 @@ check () {   # $1 = description, $2... = test
   if "$@" ; then echo "  ok    $d"; else echo "  FAIL  $d"; nfail=$((nfail+1)); fi
 }
 confval () { # $1 = file, $2 = variable: first value assigned (quotes removed)
-  grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/^ *(export +)?$2=//; s/[[:space:]]+#.*//; s/^['\"]//; s/['\"]$//"
+  grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/^ *(export +)?$2=//; s/[[:space:]]+#.*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
 }
 
 SPIN=${5:-$(confval $SRC/conf/exp.conf SPIN_UP_LENGTH)}
@@ -113,9 +113,10 @@ for f in bin/main_ASIM.sh bin/run_WPS.sh bin/run_Pert.sh bin/run_ensfcst.sh bin/
          bin/queue_sub.sh lib/timeutils.sh lib/encolarPJM.sh conf/obs.conf; do
   check "readable $f" test -r $SRC/$f
 done
-TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.stdin.* --exclude=__pycache__ --exclude=nohup.out"
+#Job logs, caches and hidden scratch files (some are unreadable by the group)
+TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.* --exclude=__pycache__ --exclude=nohup.out"
 UNREADABLE=$(cd $SRC && find bin lib conf NAMELIST \( -name '*.out' -o -name '*.err' -o -name '*.stats' \
-              -o -name '.stdin.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
+              -o -name '.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
 [ -n "$UNREADABLE" ] && echo "$UNREADABLE" | sed 's/^/        unreadable /'
 check "every file to copy from bin, lib, conf, NAMELIST is readable" test -z "$UNREADABLE"
 check "new experiment does not exist yet" test ! -e $NEW
