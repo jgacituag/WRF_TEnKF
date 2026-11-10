@@ -21,6 +21,11 @@
 #                WRFNODE=2, NITER=1, TOTAL_TIME_LIMIT=00:30:00, interactive job:
 #                a quick check of the whole chain in the "int" group.
 #   --time       job time limit (default 24:00:00; 00:30:00 with --smoke)
+#   --inode N, --wrfnode N  nodes of the job and of each WRF member (default:
+#                those of SRC_EXP). The LETKF uses all INODE nodes. Up to 384
+#                nodes the job goes to the "small" group (72 h limit), above
+#                to "large" (24 h). Example: --inode 240 --wrfnode 4 runs the
+#                60 members at once on 240 nodes.
 #
 # Steps (bin/main_ASIM.sh, lib/timeutils.sh): step 0 is the spin-up
 # forecast DA_INI_DATE -> DA_INI_DATE + SPIN_UP_LENGTH, whose output is the
@@ -42,12 +47,14 @@
 # the first step that did not finish and submit again.
 #=======================================================================
 set -e
-DRY=0 ; SMOKE=0 ; TLIM=""
+DRY=0 ; SMOKE=0 ; TLIM="" ; OPT_INODE="" ; OPT_WRFNODE=""
 while [[ "$1" == --* ]]; do
   case $1 in
     --dry-run) DRY=1 ; shift ;;
     --smoke)   SMOKE=1 ; shift ;;
     --time)    TLIM=$2 ; shift 2 ;;
+    --inode)   OPT_INODE=$2 ; shift 2 ;;
+    --wrfnode) OPT_WRFNODE=$2 ; shift 2 ;;
     *) echo "Unknown option $1"; exit 1 ;;
   esac
 done
@@ -86,6 +93,7 @@ else
   INODE=$(confval $SRC/conf/machine.conf INODE) ; WRFNODE=$(confval $SRC/conf/machine.conf WRFNODE)
   TLIM=${TLIM:-24:00:00} ; INTER=0
 fi
+INODE=${OPT_INODE:-$INODE} ; WRFNODE=${OPT_WRFNODE:-$WRFNODE}
 
 T_INI=$(date -u -d "$DA_INI UTC" +%s)
 T_END=$(date -u -d "$DA_END UTC" +%s)
@@ -100,6 +108,9 @@ echo "  info  members: boundary $BMI-$BME, target $TMI-$TME; INODE=$INODE WRFNOD
 echo "== Checks"
 check "SPIN_UP_LENGTH is a multiple of ANALYSIS_FREQ ($SPIN, $AFREQ)" test $((SPIN % AFREQ)) -eq 0
 check "at least one DA step after the spin-up" test $NSTEPS -ge 2
+check "INODE ($INODE) is a multiple of WRFNODE ($WRFNODE)" test $((INODE % WRFNODE)) -eq 0
+NCONC=$(( INODE / WRFNODE )) ; NTAR=$(( 10#$TME - 10#$TMI + 1 ))
+echo "  info  $NCONC members at a time, $NTAR members: $(( (NTAR + NCONC - 1) / NCONC )) wave(s) per guess; group $( [ $INODE -le 384 ] && echo small || echo large )"
 check "source experiment takes boundaries from GFS/GEFS (WPS_DATA_SOURCE=$SRC_SOURCE)" test "$SRC_SOURCE" == "GFS"
 check "WPS_CYCLE=1 in the source experiment" test "$WPS_CYCLE" == "1"
 for d in bin lib conf NAMELIST WRF/code WPS/code PERT/code LETKF/code; do
