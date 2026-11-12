@@ -23,6 +23,12 @@
 #   NMEM [60]  TRUTH [60]
 #   NTEMP_LIST ["1:2"], separated by ':' (pjsub -x splits on commas)
 #   ALPHA_S [1.0d0]  TEMP_RELAX_MODE [1]
+#   SKIP_IJ, SKIP_K [1, 1]  thinning of the synthetic observations
+#   NPROC [nodes], OMP_NUM_THREADS [48]: MPI processes in total and threads
+#              per process. One process per node by default. For 4 processes
+#              per node with 12 threads each (one per CMG), add
+#              --mpi "max-proc-per-node=4" to pjsub and set
+#              NPROC=<4 x nodes>,OMP_NUM_THREADS=12
 #   OUT_ROOT   [$BASE/osse/osse18]: results in $OUT_ROOT/anal_nt<N>
 #              (an existing directory is skipped, so a resubmission only
 #              runs what is missing)

@@ -27,6 +27,8 @@
 #   LETKF_EXE, SYNTH_EXE [build/FUJITSU_FUGAKU of this repository]
 #   NAMELIST [namelists/letkf_osse_cap4.namelist]
 #   SEED [60] noise seed of the synthetic observations
+#   SKIP_IJ [1], SKIP_K [1] thinning of the synthetic observations: every
+#              SKIP_IJ-th grid point in x and y, every SKIP_K-th level
 #   KEEP_WORK [0] keep OUT_DIR/work (copies of the guesses) afterwards
 #
 # Example, dress rehearsal on the smoke test (8-node interactive session,
@@ -51,6 +53,8 @@ SYNTH_EXE=${SYNTH_EXE:-$ROOT/build/FUJITSU_FUGAKU/synth_obs.exe}
 NAMELIST=${NAMELIST:-$ROOT/namelists/letkf_osse_cap4.namelist}
 LETKF_EXE=$(readlink -f $LETKF_EXE) ; SYNTH_EXE=$(readlink -f $SYNTH_EXE) ; NAMELIST=$(readlink -f $NAMELIST)
 SEED=${SEED:-60}
+SKIP_IJ=${SKIP_IJ:-1}
+SKIP_K=${SKIP_K:-1}
 NBV=$((NMEM - 1))
 
 #Runtime environment of wrfutil on Fugaku (machine.conf, MACHINE=FUGAKU)
@@ -73,6 +77,7 @@ done
 #Ensemble members (all but the truth), numbered 1..NBV for the LETKF
 ENS=$(seq 1 $NMEM | grep -vx $TRUTH)
 echo "== OSSE analysis: truth member $TRUTH, $NBV ensemble members, ntemp=$NTEMP alpha_s=$ALPHA_S relax_mode=$RELAX"
+echo "   thinning: skip_ij=$SKIP_IJ skip_k=$SKIP_K; $NPROC MPI processes, OMP_NUM_THREADS=${OMP_NUM_THREADS:-unset}"
 echo "   guesses: $GUES"
 echo "   letkf:   $LETKF_EXE ($(cd $ROOT && git describe --always --dirty 2>/dev/null))"
 
@@ -97,6 +102,8 @@ cat > synth_obs.namelist <<EOF
   ens_prefix = 'gs01'
   nens = $NBV
   seed = $SEED
+  skip_ij = $SKIP_IJ
+  skip_k = $SKIP_K
   obs_file = 'rad0101.dat'
   truth_obs_file = 'truth_rad0101.dat'
 /
