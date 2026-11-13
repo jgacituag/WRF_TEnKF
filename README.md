@@ -170,6 +170,26 @@ from the source.
   (to single precision); (C) reflectivity with `ntemp = 3` in every RTPP
   mode.
 
+## OSSE verification (`verif/`)
+
+Python 3 with numpy, scipy, pandas, matplotlib and netCDF4; on Fugaku, a Jupyter
+session on a pre/post node (Open OnDemand, System "Prepost"), with netCDF4 installed
+once into the data area:
+`python3.12 -m pip install --no-deps --target /data/ra000007/$USER/pylib netCDF4 cftime certifi`.
+
+- `osse_io.py` reads wrfout files and applies the reflectivity operator of the LETKF
+  (Tong & Xue 2006, method 2 of `calc_ref_vr`) in NumPy.
+- `check_operator.py TRUTH_WRFOUT truth_rad0101.dat` compares it with the Fortran
+  values `synth_obs` wrote for the truth at every observation (must agree within
+  0.01 dBZ).
+- `reduce_osse.py` reads, for each valid time, the truth, the reference ensemble (the
+  prior at 18:00, the forecast without DA afterwards) and each experiment, and writes
+  pooled sums per experiment, variable and domain (global, reached, storm, observed:
+  the Chapter 4 domains), per-level sums and 2-D slices to `osse/osse18/verif/`.
+- `V1_OSSE_1800.ipynb` reads them: skill scores of the analyses and of the forecasts
+  by lead time, maps, a vertical section and vertical profiles, with bilingual
+  figures (`vcommon.py`: the Chapter 4 notebook conventions).
+
 ## Use with wrfutil
 
 On Fugaku, keep the repository, builds, test cases and results in the
