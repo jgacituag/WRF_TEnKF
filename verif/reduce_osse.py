@@ -39,14 +39,17 @@ Reflectivity is computed member by member with the Tong & Xue operator of the LE
 Usage (on a Fugaku pre/post node, python3.12 with netCDF4 in PYLIB):
   python3.12 verif/reduce_osse.py --osse /data/ra000007/$USER/osse --exps nt1,nt2,nt4 --nproc 32
   options: --times 1800,1805,...  --out DIR  --ne 59 --truth 60 --zmax 16000 --overwrite
-Memory: about 31 GB per ensemble held (two at a time), so about 70 GB with the work arrays.
+Memory: the levels are processed in chunks sized to the session's memory limit (cgroup),
+so one chunk of one ensemble takes at most --mem-frac of it. Progress is printed per
+chunk; if a reading process dies (memory), the script stops after --timeout s instead of
+waiting forever.
 """
 import argparse
 import os
 import sys
 import time
 from datetime import datetime, timedelta
-from multiprocessing import get_context, shared_memory
+from multiprocessing import TimeoutError as PoolTimeout, get_context
 from pathlib import Path
 
 import numpy as np
@@ -91,51 +94,57 @@ class Layout:
 
 
 # ----------------------------------------------------------------------------------
-# Reading an ensemble into shared memory, one process per member file
+# Reading an ensemble, one worker process per member file
 # ----------------------------------------------------------------------------------
-_SHM = {}
-
-
-def _init(names, shape, box):
-    global _SHM
-    _SHM = {"box": box, "arr": {}}
-    for v, name in names.items():
-        shm = shared_memory.SharedMemory(name=name)
-        _SHM["arr"][v] = (shm, np.ndarray(shape, np.float32, buffer=shm.buf))
-
-
 def _read_member(args):
-    m, path = args
-    x = io.read_wrf(path, _SHM["box"])
-    for v, (_, arr) in _SHM["arr"].items():
-        arr[m] = x[v]
-    return m
+    m, path, box = args
+    return m, io.read_wrf(path, box)
 
 
-class Ensemble:
-    """(NE, nk, ny, nx) float32 arrays per variable, in shared memory."""
+def mem_limit_gb():
+    """Memory this process may use: the cgroup limit of the session (Slurm, Open
+    OnDemand), or the physical memory when there is none."""
+    for f in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            v = open(f).read().strip()
+            if v != "max" and int(v) < 1 << 60:
+                return int(v) / 2 ** 30
+        except (OSError, ValueError):
+            pass
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 30
 
-    def __init__(self, files, box, nproc):
-        k0, k1, j0, j1, i0, i1 = box
-        shape = (len(files), k1 - k0, j1 - j0, i1 - i0)
-        nbytes = int(np.prod(shape)) * 4
-        self.shm = {v: shared_memory.SharedMemory(create=True, size=nbytes) for v in io.VARS}
-        self.x = {v: np.ndarray(shape, np.float32, buffer=s.buf) for v, s in self.shm.items()}
+
+class Reader:
+    """A pool of worker processes (spawned, not forked: HDF5 state is not inherited)
+    that read member files and return their arrays."""
+
+    def __init__(self, nproc, timeout):
+        self.pool = get_context("spawn").Pool(nproc)
+        self.timeout = timeout
+
+    def ensemble(self, files, box, log=None, label=""):
+        """(NE, nk, ny, nx) float32 arrays per variable."""
         missing = [str(f) for f in files if not Path(f).exists()]
         if missing:
-            self.close()
             raise FileNotFoundError(f"{len(missing)} member files missing, first {missing[0]}")
-        names = {v: s.name for v, s in self.shm.items()}
-        with get_context("fork").Pool(nproc, initializer=_init, initargs=(names, shape, box)) as pool:
-            for _ in pool.imap_unordered(_read_member, list(enumerate(files))):
-                pass
+        k0, k1, j0, j1, i0, i1 = box
+        shape = (len(files), k1 - k0, j1 - j0, i1 - i0)
+        x = {v: np.empty(shape, np.float32) for v in io.VARS}
+        it = self.pool.imap_unordered(_read_member, [(m, f, box) for m, f in enumerate(files)])
+        for n in range(len(files)):
+            try:
+                m, xm = it.next(timeout=self.timeout)
+            except PoolTimeout as err:
+                raise RuntimeError(f"reading {label}: no member arrived in {self.timeout} s; "
+                                   f"a reading process may have been killed for memory: "
+                                   f"lower --mem-frac or --nproc") from err
+            for v in io.VARS:
+                x[v][m] = xm[v]
+            del xm
+        return x
 
     def close(self):
-        self.x = {}
-        for s in self.shm.values():
-            s.close()
-            s.unlink()
-        self.shm = {}
+        self.pool.terminate()
 
 
 # ----------------------------------------------------------------------------------
@@ -191,6 +200,10 @@ def main():
     ap.add_argument("--truth", type=int, default=60)
     ap.add_argument("--zmax", type=float, default=16000.0)
     ap.add_argument("--nproc", type=int, default=16)
+    ap.add_argument("--mem-frac", type=float, default=0.5,
+                    help="fraction of the session memory one ensemble chunk may take")
+    ap.add_argument("--kchunk", type=int, default=0, help="levels per chunk (0: from the memory)")
+    ap.add_argument("--timeout", type=float, default=900.0, help="seconds to wait for one member")
     ap.add_argument("--overwrite", action="store_true")
     a = ap.parse_args()
 
@@ -202,11 +215,10 @@ def main():
     tick = time.time()
     log = lambda msg: print(f"[{time.time() - tick:7.1f} s] {msg}", flush=True)  # noqa: E731
 
-    # ---- verification box and fixed domains -------------------------------------
+    # ---- verification box and fixed observed domain ------------------------------
     mfile = out / "masks.npz"
     if mfile.exists() and not a.overwrite:
         mk = dict(np.load(mfile))
-        box = tuple(int(b) for b in mk["box"])
         log(f"masks from {mfile}")
     else:
         if L.t0 not in times:
@@ -231,79 +243,121 @@ def main():
                   lat=info["lat"][j0:j1, i0:i1], lon=info["lon"][j0:j1, i0:i1], n_obs=len(obs))
         log(f"box k {k0}:{k1} j {j0}:{j1} i {i0}:{i1}; {region.sum()} cells, "
             f"{observed.sum()} observed ({len(obs)} observations)")
+    box = tuple(int(b) for b in mk["box"])
+    k0, k1, j0, j1, i0, i1 = box
+    nk = k1 - k0
 
-    for t in times:
-        tag = f"{t:%H%M}"
-        if (out / f"stats_{tag}.csv").exists() and not a.overwrite:
-            log(f"{tag}: exists, skipped")
-            continue
-        lead = int((t - L.t0).total_seconds() // 60)
-        refname = "prior" if t == L.t0 else "noda"
-        truth = io.read_wrf(L.truth_file(t), box)
-        region = mk["region"]
-        colmax = np.where(region, truth["ref"], -np.inf).max(axis=0)
-        storm = np.broadcast_to(colmax >= STORM_THRESH_DBZ, region.shape) & region
-        log(f"{tag}: truth read, {storm[0].sum()} storm columns")
+    # ---- level chunks that fit in memory -------------------------------------------
+    gb_level = len(io.VARS) * a.ne * (j1 - j0) * (i1 - i0) * 4 / 2 ** 30
+    mem = mem_limit_gb()
+    cores = len(os.sched_getaffinity(0))
+    if a.nproc > cores:
+        log(f"--nproc {a.nproc} > {cores} cores of this session: using {cores}")
+        a.nproc = cores
+    kc = a.kchunk or max(1, min(nk, int(a.mem_frac * mem / (1.6 * gb_level))))
+    chunks = [(k, min(k + kc, nk)) for k in range(0, nk, kc)]
+    log(f"memory {mem:.0f} GB; one level of one ensemble {gb_level:.2f} GB; "
+        f"{len(chunks)} chunks of up to {kc} levels; {a.nproc} reading processes")
+    reader = Reader(a.nproc, a.timeout)
 
-        ref = Ensemble(L.files(refname, t), box, a.nproc)
-        log(f"{tag}: {refname} read")
-        if "reached" not in mk:              # 18:00, first experiment against the prior
-            first = Ensemble(L.files(exps[0], t), box, a.nproc)
-            changed = np.zeros(region.shape, bool)
-            for v in io.VARS:
-                changed |= (first.x[v] != ref.x[v]).any(axis=0)
-            first.close()
-            mk["reached"] = changed & region
-            j_storm = storm[mk["lev5"]].sum(axis=1)
-            mk["jsec"] = int(np.argmax(j_storm))
-            np.savez_compressed(mfile, **mk)
-            log(f"{tag}: reached {mk['reached'].sum()} cells; masks saved")
-        domains = dict(global_=region, reached=mk["reached"], storm=storm, observed=mk["observed"])
-        lev5, jsec = int(mk["lev5"]), int(mk["jsec"])
+    def cbox(c):
+        return (k0 + c[0], k0 + c[1], j0, j1, i0, i1)
 
-        rows, levels, slices = [], {}, {}
-        slices["truth_ref5"] = truth["ref"][lev5]
-        slices["truth_colmax"] = np.where(region, truth["ref"], np.nan).max(axis=0)
-        slices["truth_sec"] = truth["ref"][:, jsec, :]
-        ref_abserr = {}
-        for name, ens in [(refname, ref)] + [(e, None) for e in exps]:
-            if ens is None:
-                try:
-                    ens = Ensemble(L.files(name, t), box, a.nproc)
-                except FileNotFoundError as err:
-                    log(f"{tag}: {name} skipped ({err})")
+    try:
+        for t in times:
+            tag = f"{t:%H%M}"
+            if (out / f"stats_{tag}.csv").exists() and not a.overwrite:
+                log(f"{tag}: exists, skipped")
+                continue
+            lead = int((t - L.t0).total_seconds() // 60)
+            refname = "prior" if t == L.t0 else "noda"
+            truth = io.read_wrf(L.truth_file(t), box)
+            region = mk["region"]
+            colmax = np.where(region, truth["ref"], -np.inf).max(axis=0)
+            storm = np.broadcast_to(colmax >= STORM_THRESH_DBZ, region.shape) & region
+            log(f"{tag}: truth read, {storm[0].sum()} storm columns")
+
+            if "reached" not in mk:          # 18:00: where the first experiment changed the prior
+                changed = np.zeros(region.shape, bool)
+                for c in chunks:
+                    f = reader.ensemble(L.files(refname, t), cbox(c), log, f"{refname} {c}")
+                    e = reader.ensemble(L.files(exps[0], t), cbox(c), log, f"{exps[0]} {c}")
+                    for v in io.VARS:
+                        changed[c[0]:c[1]] |= (e[v] != f[v]).any(axis=0)
+                    del f, e
+                    log(f"{tag}: reached, levels {c[0]}-{c[1] - 1} done")
+                mk["reached"] = changed & region
+                j_storm = storm[int(mk["lev5"])].sum(axis=1)
+                mk["jsec"] = int(np.argmax(j_storm))
+                np.savez_compressed(mfile, **mk)
+                log(f"{tag}: reached {mk['reached'].sum()} cells; masks saved")
+            domains = dict(global_=region, reached=mk["reached"], storm=storm, observed=mk["observed"])
+            lev5, jsec = int(mk["lev5"]), int(mk["jsec"])
+
+            rows, levels, slices = [], {}, {}
+            slices["truth_ref5"] = truth["ref"][lev5]
+            slices["truth_colmax"] = np.where(region, truth["ref"], np.nan).max(axis=0)
+            slices["truth_sec"] = truth["ref"][:, jsec, :]
+            ref_abserr = {v: np.zeros(region.shape, np.float32) for v in io.VARS}
+            for name in [refname] + exps:
+                isref = name == refname
+                acc = {}                       # (var, domain) -> per-level sums
+                ref_mean = np.full(region.shape, np.nan, np.float32)
+                ref_sd5 = None
+                skip = False
+                for c in chunks:
+                    try:
+                        ens = reader.ensemble(L.files(name, t), cbox(c), log, f"{name} {c}")
+                    except FileNotFoundError as err:
+                        log(f"{tag}: {name} skipped ({err})")
+                        skip = True
+                        break
+                    sl = slice(c[0], c[1])
+                    tr = {v: truth[v][sl] for v in io.VARS}
+                    for v in io.VARS:
+                        st = field_stats(ens[v], tr[v])
+                        if isref:
+                            ref_abserr[v][sl] = np.abs(st["err"])
+                        for dname, dom in domains.items():
+                            d = dname.rstrip("_")
+                            s = sums(st, dom[sl], None if isref else ref_abserr[v][sl], TOL[v])
+                            for key, arr in s.items():
+                                acc.setdefault((v, d), {}).setdefault(key, np.zeros(nk))[sl] = arr
+                        if v == "ref":
+                            ref_mean[sl] = st["mean"]
+                            if c[0] <= lev5 < c[1]:
+                                ref_sd5 = np.sqrt(st["var"][lev5 - c[0]])
+                                if not isref:
+                                    slices[f"{name}_skill5"] = (ref_abserr[v][lev5]
+                                                                - np.abs(st["err"][lev5 - c[0]]))
+                        del st
+                    del ens
+                    log(f"{tag}: {name} levels {c[0]}-{c[1] - 1} done")
+                if skip:
                     continue
-            for v in io.VARS:
-                st = field_stats(ens.x[v], truth[v])
-                if name == refname:
-                    ref_abserr[v] = np.abs(st["err"])
-                for dname, dom in domains.items():
-                    d = dname.rstrip("_")
-                    s = sums(st, dom, None if name == refname else ref_abserr[v], TOL[v])
-                    levels[f"{name}|{v}|{d}"] = np.stack([s[k] for k in ("n", "sse", "se", "svar", "scrps")])
+                for (v, d), s in acc.items():
+                    keys = ("n", "sse", "se", "svar", "scrps")
+                    levels[f"{name}|{v}|{d}"] = np.stack([s[k] for k in keys])
                     rows.append(dict(time=tag, lead=lead, exp=name, var=v, domain=d,
                                      **{k: float(np.sum(x)) for k, x in s.items()}))
-                if v == "ref":
-                    slices[f"{name}_ref5"] = st["mean"][lev5]
-                    slices[f"{name}_colmax"] = np.where(region, st["mean"], np.nan).max(axis=0)
-                    slices[f"{name}_sec"] = st["mean"][:, jsec, :]
-                    slices[f"{name}_spread5"] = np.sqrt(st["var"][lev5])
-                    if name != refname:
-                        slices[f"{name}_skill5"] = ref_abserr[v][lev5] - np.abs(st["err"][lev5])
-                del st
-            ens.close()
-            log(f"{tag}: {name} done")
+                slices[f"{name}_ref5"] = ref_mean[lev5]
+                slices[f"{name}_colmax"] = np.where(region, ref_mean, np.nan).max(axis=0)
+                slices[f"{name}_sec"] = ref_mean[:, jsec, :]
+                slices[f"{name}_spread5"] = ref_sd5
 
-        import csv
-        with open(out / f"stats_{tag}.csv", "w", newline="") as f:
-            cols = ["time", "lead", "exp", "var", "domain", "n", "sse", "se", "svar", "scrps", "n_imp", "n_deg"]
-            wr = csv.DictWriter(f, fieldnames=cols)
-            wr.writeheader()
-            for r in rows:
-                wr.writerow({c: r.get(c, "") for c in cols})
-        np.savez_compressed(out / f"levels_{tag}.npz", **levels)
-        np.savez_compressed(out / f"slices_{tag}.npz", **slices)
-        log(f"{tag}: written")
+            import csv
+            with open(out / f"stats_{tag}.csv", "w", newline="") as f:
+                cols = ["time", "lead", "exp", "var", "domain", "n", "sse", "se", "svar", "scrps",
+                        "n_imp", "n_deg"]
+                wr = csv.DictWriter(f, fieldnames=cols)
+                wr.writeheader()
+                for r in rows:
+                    wr.writerow({c: r.get(c, "") for c in cols})
+            np.savez_compressed(out / f"levels_{tag}.npz", **levels)
+            np.savez_compressed(out / f"slices_{tag}.npz", **slices)
+            log(f"{tag}: written")
+    finally:
+        reader.close()
 
 
 if __name__ == "__main__":
