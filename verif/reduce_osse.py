@@ -13,7 +13,10 @@ experiment's ensemble (members 1..NE), and writes:
   slices_<HHMM>.npz   2-D fields for figures: reflectivity of the truth and of each
                       ensemble mean at the level nearest 5 km, column maxima, a vertical
                       section, the spread at 5 km and the cell-wise skill at 5 km.
-  masks.npz           the verification box and the fixed domains (from 18:00).
+  colmax_<HHMM>.npz   column-maximum reflectivity of the truth and of every member of every
+                      ensemble (float16), for the categorical and neighborhood scores the
+                      notebook computes (FSS, ROC AUC, frequency bias).
+  masks.npz           the verification box and the observed cells (from 18:00).
 
 Times and sources (DATE = 2024-03-19, analysis at 18:00):
   18:00        reference "prior": DA run guesses   <osse>/da4km/HIST/GUES/<DATE>180000/gues<NNNNN>
@@ -23,15 +26,16 @@ Times and sources (DATE = 2024-03-19, analysis at 18:00):
                experiment ntN:    <osse>/osse18/fc_ntN/... (same layout)
                truth:             member TRUTH of fc_noda
 
-Domains (Chapter 4, nbcommon / da.metrics.domain_masks):
+Domains:
   global    every cell of the verification box: interior points (3..n-2 in Fortran
             numbering), levels 2..nlev-2 with height <= ZMAX, as the synthetic
-            observations;
-  reached   cells where the first experiment's analysis differs from the prior in any
-            member and variable (the update reached them); fixed after 18:00;
-  storm     columns whose truth column maximum reflectivity >= 20 dBZ, at the valid time;
+            observations; every variable;
+  echo      cells of the box where the truth or the ensemble mean (mean of H(x_i)) of
+            any ensemble at that time (reference and experiments) reaches ECHO dBZ:
+            the same cells for every experiment, so that missed and spurious echo both
+            count; reflectivity only;
   observed  cells carrying a synthetic observation (rad0101.dat of the first experiment);
-            fixed after 18:00.
+            fixed after 18:00; every variable.
 
 Reflectivity is computed member by member with the Tong & Xue operator of the LETKF
 (osse_io.calc_ref; check it with check_operator.py) and averaged in dBZ.
@@ -57,9 +61,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import osse_io as io  # noqa: E402
 
-STORM_THRESH_DBZ = 20.0
+STORM_THRESH_DBZ = 20.0      # only to place the vertical section
 TOL = dict(ref=1e-3, qr=1e-7, qs=1e-7, qg=1e-7, T=1e-3, P=1e-1, u=1e-4, v=1e-4, w=1e-4)
-DOMAINS = ("global", "reached", "storm", "observed")
+DOMAINS = ("global", "echo", "observed")
 
 
 # ----------------------------------------------------------------------------------
@@ -199,6 +203,7 @@ def main():
     ap.add_argument("--ne", type=int, default=59)
     ap.add_argument("--truth", type=int, default=60)
     ap.add_argument("--zmax", type=float, default=16000.0)
+    ap.add_argument("--echo", type=float, default=10.0, help="echo threshold of the echo domain [dBZ]")
     ap.add_argument("--nproc", type=int, default=16)
     ap.add_argument("--mem-frac", type=float, default=0.5,
                     help="fraction of the session memory one ensemble chunk may take")
@@ -273,25 +278,15 @@ def main():
             refname = "prior" if t == L.t0 else "noda"
             truth = io.read_wrf(L.truth_file(t), box)
             region = mk["region"]
-            colmax = np.where(region, truth["ref"], -np.inf).max(axis=0)
-            storm = np.broadcast_to(colmax >= STORM_THRESH_DBZ, region.shape) & region
+            tcol = np.where(region, truth["ref"], -np.inf).max(axis=0)
+            storm = np.broadcast_to(tcol >= STORM_THRESH_DBZ, region.shape) & region
             log(f"{tag}: truth read, {storm[0].sum()} storm columns")
 
-            if "reached" not in mk:          # 18:00: where the first experiment changed the prior
-                changed = np.zeros(region.shape, bool)
-                for c in chunks:
-                    f = reader.ensemble(L.files(refname, t), cbox(c), log, f"{refname} {c}")
-                    e = reader.ensemble(L.files(exps[0], t), cbox(c), log, f"{exps[0]} {c}")
-                    for v in io.VARS:
-                        changed[c[0]:c[1]] |= (e[v] != f[v]).any(axis=0)
-                    del f, e
-                    log(f"{tag}: reached, levels {c[0]}-{c[1] - 1} done")
-                mk["reached"] = changed & region
-                j_storm = storm[int(mk["lev5"])].sum(axis=1)
-                mk["jsec"] = int(np.argmax(j_storm))
+            if "jsec" not in mk:             # 18:00: section through the most storm columns
+                mk["jsec"] = int(np.argmax(storm[int(mk["lev5"])].sum(axis=1)))
                 np.savez_compressed(mfile, **mk)
-                log(f"{tag}: reached {mk['reached'].sum()} cells; masks saved")
-            domains = dict(global_=region, reached=mk["reached"], storm=storm, observed=mk["observed"])
+                log(f"{tag}: masks saved")
+            domains = dict(global_=region, observed=mk["observed"])
             lev5, jsec = int(mk["lev5"]), int(mk["jsec"])
 
             rows, levels, slices = [], {}, {}
@@ -299,10 +294,15 @@ def main():
             slices["truth_colmax"] = np.where(region, truth["ref"], np.nan).max(axis=0)
             slices["truth_sec"] = truth["ref"][:, jsec, :]
             ref_abserr = {v: np.zeros(region.shape, np.float32) for v in io.VARS}
+            zfields = {}                       # exp -> (mean, var, crps) of reflectivity
+            colmax = {"truth": np.where(region, truth["ref"], 0).max(axis=0).astype(np.float16)}
             for name in [refname] + exps:
                 isref = name == refname
                 acc = {}                       # (var, domain) -> per-level sums
                 ref_mean = np.full(region.shape, np.nan, np.float32)
+                z_var = np.zeros(region.shape, np.float32)
+                z_crps = np.zeros(region.shape, np.float32)
+                cmax = None
                 ref_sd5 = None
                 skip = False
                 for c in chunks:
@@ -325,6 +325,10 @@ def main():
                                 acc.setdefault((v, d), {}).setdefault(key, np.zeros(nk))[sl] = arr
                         if v == "ref":
                             ref_mean[sl] = st["mean"]
+                            z_var[sl] = st["var"]
+                            z_crps[sl] = st["crps"]
+                            cm = np.where(region[sl], ens["ref"], 0).max(axis=1)
+                            cmax = cm if cmax is None else np.maximum(cmax, cm)
                             if c[0] <= lev5 < c[1]:
                                 ref_sd5 = np.sqrt(st["var"][lev5 - c[0]])
                                 if not isref:
@@ -344,6 +348,21 @@ def main():
                 slices[f"{name}_colmax"] = np.where(region, ref_mean, np.nan).max(axis=0)
                 slices[f"{name}_sec"] = ref_mean[:, jsec, :]
                 slices[f"{name}_spread5"] = ref_sd5
+                zfields[name] = (ref_mean, z_var, z_crps)
+                colmax[name] = cmax.astype(np.float16)
+
+            # echo domain: the same cells for every ensemble of this time
+            echo = truth["ref"] >= a.echo
+            for zm, _, _ in zfields.values():
+                echo |= zm >= a.echo
+            echo &= region
+            for name, (zm, zv, zc) in zfields.items():
+                st = dict(err=zm - truth["ref"], var=zv, crps=zc)
+                s = sums(st, echo, None if name == refname else ref_abserr["ref"], TOL["ref"])
+                levels[f"{name}|ref|echo"] = np.stack([s[k] for k in ("n", "sse", "se", "svar", "scrps")])
+                rows.append(dict(time=tag, lead=lead, exp=name, var="ref", domain="echo",
+                                 **{k: float(np.sum(x)) for k, x in s.items()}))
+            log(f"{tag}: echo domain {echo.sum()} cells ({echo.sum() / region.sum():.3f} of the box)")
 
             import csv
             with open(out / f"stats_{tag}.csv", "w", newline="") as f:
@@ -355,6 +374,7 @@ def main():
                     wr.writerow({c: r.get(c, "") for c in cols})
             np.savez_compressed(out / f"levels_{tag}.npz", **levels)
             np.savez_compressed(out / f"slices_{tag}.npz", **slices)
+            np.savez_compressed(out / f"colmax_{tag}.npz", **colmax)
             log(f"{tag}: written")
     finally:
         reader.close()

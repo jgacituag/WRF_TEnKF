@@ -183,12 +183,17 @@ once into the data area:
   values `synth_obs` wrote for the truth at every observation (must agree within
   0.01 dBZ).
 - `reduce_osse.py` reads, for each valid time, the truth, the reference ensemble (the
-  prior at 18:00, the forecast without DA afterwards) and each experiment, and writes
-  pooled sums per experiment, variable and domain (global, reached, storm, observed:
-  the Chapter 4 domains), per-level sums and 2-D slices to `osse/osse18/verif/`.
-- `V1_OSSE_1800.ipynb` reads them: skill scores of the analyses and of the forecasts
-  by lead time, maps, a vertical section and vertical profiles, with bilingual
-  figures (`vcommon.py`: the Chapter 4 notebook conventions).
+  prior at 18:00, the forecast without DA afterwards) and each experiment, level chunk by
+  level chunk (`--kchunk`, sized to the session memory), and writes to
+  `osse/osse18/verif/` pooled sums per experiment, variable and domain (whole box; echo
+  cells, where the truth or any ensemble mean reaches 10 dBZ, the same cells for every
+  experiment; observed cells), per-level sums, 2-D slices, and the column-maximum
+  reflectivity of every member.
+- `V1_OSSE_1800.ipynb` reads them: RMSE, CRPS, spread and skill scores of the analyses
+  and of the forecasts by lead time; FSS by scale, ROC AUC of the neighborhood ensemble
+  probability and frequency bias of the column maximum at 20 and 35 dBZ
+  (`vcommon.spatial_scores`); maps, a vertical section and vertical profiles, with
+  bilingual figures (`vcommon.py`).
 
 ## Use with wrfutil
 

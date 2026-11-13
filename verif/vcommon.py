@@ -11,6 +11,14 @@ Metric definitions, as in Chapter 4 (da/metrics.py):
   CRPS   sum CRPS / n
   SS     1 - M_exp / M_ref, with M pooled over the domain before the ratio
   F      fraction of the cells that change beyond TOL whose |error| decreases
+Spatial scores on column-maximum reflectivity (spatial_scores), event Z >= threshold:
+  FSS    fractions skill score (Roberts & Lean 2008), 1 - sum (P - O)^2 / (sum P^2 + sum O^2),
+         with O the fraction of truth columns with the event in a square of side s and P
+         the same fraction averaged over the members (the ensemble fraction)
+  AUC    area under the ROC curve of the neighborhood ensemble probability (the fraction
+         of members with the event within NEP_R grid points), against the truth event at
+         the column, as Snook et al. (2015) and Supinie et al. (2016)
+  bias   frequency bias, member event area over truth event area, averaged over members
 """
 import os
 import re as _re
@@ -93,7 +101,9 @@ VOCAB = {
         "frac_imp": "fracción que mejora", "nt": r"pasos de temperado $N_t$",
         "truth": "verdad", "ens_mean": "media del ensamble", "ens_spread": "dispersión",
         "dom_global": "dominio", "dom_reached": "celdas alcanzadas", "dom_storm": "tormenta",
-        "dom_observed": "celdas observadas", "lead": "plazo [min]", "height": "altura [km]",
+        "dom_observed": "celdas observadas",
+        "dom_echo": "celdas con eco", "fss": "FSS", "auc": "AUC (ROC)",
+        "freq_bias": "sesgo de frecuencia", "scale_km": "escala [km]", "thr": "umbral", "lead": "plazo [min]", "height": "altura [km]",
         "rmse": "RMSE", "spread_ratio": "dispersión / RMSE", "ref": "reflectividad [dBZ]",
         "skill": r"$|e_{\mathrm{ref}}| - |e|$ [dBZ]", "x_km": "x [km]",
         "lon": "longitud", "lat": "latitud",
@@ -103,14 +113,16 @@ VOCAB = {
         "frac_imp": "fraction improving", "nt": r"tempering steps $N_t$",
         "truth": "truth", "ens_mean": "ensemble mean", "ens_spread": "spread",
         "dom_global": "domain", "dom_reached": "reached cells", "dom_storm": "storm",
-        "dom_observed": "observed cells", "lead": "lead time [min]", "height": "height [km]",
+        "dom_observed": "observed cells",
+        "dom_echo": "echo cells", "fss": "FSS", "auc": "ROC AUC",
+        "freq_bias": "frequency bias", "scale_km": "scale [km]", "thr": "threshold", "lead": "lead time [min]", "height": "height [km]",
         "rmse": "RMSE", "spread_ratio": "spread / RMSE", "ref": "reflectivity [dBZ]",
         "skill": r"$|e_{\mathrm{ref}}| - |e|$ [dBZ]", "x_km": "x [km]",
         "lon": "longitude", "lat": "latitude",
     },
 }
 assert set(VOCAB["es"]) == set(VOCAB["en"])
-DOMAINS = ("global", "reached", "storm", "observed")
+DOMAINS = ("global", "echo", "observed")
 
 _DECIMAL_POINT = _re.compile(r"(?<=\d)\.(?=\d)")
 _WEST = _re.compile("(°|\\^\\{\\\\circ\\}\\$?)W\\b")
@@ -234,3 +246,70 @@ def load_npz(name, verif=VERIF):
 
 def experiments(df):
     return sorted({e for e in df.exp.unique() if e not in ("prior", "noda")}, key=nt_of)
+
+
+# ---------------------------------------------------------------------------------
+# Spatial scores of column-maximum reflectivity (colmax_<HHMM>.npz)
+# ---------------------------------------------------------------------------------
+THRESHOLDS = (20.0, 35.0)       # dBZ
+SCALES = (1, 3, 7, 15)          # FSS square side in grid points (4, 12, 28, 60 km at 4 km)
+NEP_R = 1                       # neighborhood radius of the ensemble probability [grid points]
+DX_KM = 4.0
+
+
+def _disk(r):
+    y, x = np.mgrid[-r:r + 1, -r:r + 1]
+    return x * x + y * y <= r * r
+
+
+def fss(p, o, s):
+    """FSS of forecast and observed fields of 0/1 or fractions, square side s."""
+    from scipy.ndimage import uniform_filter
+    pf = uniform_filter(p.astype(np.float64), s, mode="constant")
+    of = uniform_filter(o.astype(np.float64), s, mode="constant")
+    den = (pf ** 2).sum() + (of ** 2).sum()
+    return np.nan if den == 0 else 1 - ((pf - of) ** 2).sum() / den
+
+
+def roc_auc(prob, event):
+    """Area under the ROC curve; prob takes the values k/NE."""
+    prob, event = prob.ravel(), event.ravel()
+    ne_ev, ne_no = event.sum(), (~event).sum()
+    if ne_ev == 0 or ne_no == 0:
+        return np.nan
+    levels = np.unique(prob)[::-1]
+    pod = [0.0] + [(event & (prob >= q)).sum() / ne_ev for q in levels]
+    pofd = [0.0] + [(~event & (prob >= q)).sum() / ne_no for q in levels]
+    pod.append(1.0); pofd.append(1.0)
+    return float(np.trapezoid(pod, pofd) if hasattr(np, "trapezoid") else np.trapz(pod, pofd))
+
+
+def spatial_scores(verif=VERIF, thresholds=THRESHOLDS, scales=SCALES, nep_r=NEP_R):
+    """FSS, ROC AUC and frequency bias of every ensemble in every colmax_<HHMM>.npz, as a
+    long DataFrame (time, lead, exp, thr, metric, scale_km, value)."""
+    from scipy.ndimage import maximum_filter
+    rows = []
+    files = sorted(Path(verif).glob("colmax_*.npz"))
+    if not files:
+        raise FileNotFoundError(f"no colmax_*.npz in {verif}: run verif/reduce_osse.py")
+    for f in files:
+        tag = f.stem.split("_")[1]
+        lead = (int(tag[:2]) - 18) * 60 + int(tag[2:])
+        with np.load(f) as z:
+            truth = z["truth"].astype(np.float32)
+            for exp in [k for k in z.files if k != "truth"]:
+                ens = z[exp].astype(np.float32)
+                for thr in thresholds:
+                    obs = truth >= thr
+                    ev = ens >= thr
+                    base = dict(time=tag, lead=lead, exp=exp, thr=thr)
+                    p = ev.mean(axis=0)
+                    for s in scales:
+                        rows.append(dict(base, metric="fss", scale_km=s * DX_KM, value=fss(p, obs, s)))
+                    nb = np.stack([maximum_filter(m, footprint=_disk(nep_r), mode="constant")
+                                   for m in ev]).mean(axis=0)
+                    rows.append(dict(base, metric="auc", scale_km=nep_r * DX_KM, value=roc_auc(nb, obs)))
+                    nobs = obs.sum()
+                    rows.append(dict(base, metric="bias", scale_km=0.0,
+                                     value=ev.sum(axis=(1, 2)).mean() / nobs if nobs else np.nan))
+    return pd.DataFrame(rows)
