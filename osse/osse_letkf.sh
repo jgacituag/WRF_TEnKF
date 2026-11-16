@@ -23,8 +23,10 @@
 #   NTEMP, ALPHA_S, TEMP_RELAX_MODE  tempering (defaults 1, 1.0d0, 1)
 #
 # Environment (defaults in brackets):
-#   NPROC [8]  MPI ranks;  MPIEXE ["mpiexec -n $NPROC"]
-#   LETKF_EXE, SYNTH_EXE [build/FUJITSU_FUGAKU of this repository]
+#   NPROC [8]  MPI processes;  MPIEXE ["mpiexec -n $NPROC"; on Hydra inside
+#              a PBS job, one process per node of the job]
+#   BUILD [FUJITSU_FUGAKU on Fugaku, INTEL_HYDRA elsewhere]
+#   LETKF_EXE, SYNTH_EXE [build/$BUILD of this repository]
 #   NAMELIST [namelists/letkf_osse_cap4.namelist]
 #   SEED [60] noise seed of the synthetic observations
 #   SKIP_IJ [1], SKIP_K [1] thinning of the synthetic observations: every
@@ -47,9 +49,9 @@ NTEMP=${5:-1}
 ALPHA_S=${6:-1.0d0}
 RELAX=${7:-1}
 NPROC=${NPROC:-8}
-MPIEXE=${MPIEXE:-"mpiexec -n $NPROC"}
-LETKF_EXE=${LETKF_EXE:-$ROOT/build/FUJITSU_FUGAKU/letkf.exe}
-SYNTH_EXE=${SYNTH_EXE:-$ROOT/build/FUJITSU_FUGAKU/synth_obs.exe}
+BUILD=${BUILD:-$( [ -d /opt/FJSVxtclanga ] && echo FUJITSU_FUGAKU || echo INTEL_HYDRA )}
+LETKF_EXE=${LETKF_EXE:-$ROOT/build/$BUILD/letkf.exe}
+SYNTH_EXE=${SYNTH_EXE:-$ROOT/build/$BUILD/synth_obs.exe}
 NAMELIST=${NAMELIST:-$ROOT/namelists/letkf_osse_cap4.namelist}
 LETKF_EXE=$(readlink -f $LETKF_EXE) ; SYNTH_EXE=$(readlink -f $SYNTH_EXE) ; NAMELIST=$(readlink -f $NAMELIST)
 SEED=${SEED:-60}
@@ -63,7 +65,21 @@ if [ -d /opt/FJSVxtclanga ]; then
   export OMP_NUM_THREADS=${OMP_NUM_THREADS:-48}
   export PARALLEL=$OMP_NUM_THREADS
   export OMP_STACKSIZE=${OMP_STACKSIZE:-2G}
+#Runtime environment of wrfutil on Hydra (machine.conf, MACHINE=HYDRA)
+elif [ -r /opt/load-libs.sh ]; then
+  source /opt/load-libs.sh 1
+  export HDF5_USE_FILE_LOCKING=FALSE
+  ulimit -s unlimited
+  export OMP_NUM_THREADS=${OMP_NUM_THREADS:-48}
+  export OMP_STACKSIZE=${OMP_STACKSIZE:-2G}
+  #Inside a PBS job: one MPI process per node, as wrfutil's machine files
+  if [ -z "$MPIEXE" ] && [ -n "$PBS_NODEFILE" ]; then
+    MACHINES=$(mktemp) ; sort -u $PBS_NODEFILE > $MACHINES
+    NPROC=$(wc -l < $MACHINES)
+    MPIEXE="/opt/intel/oneapi/mpi/latest/bin/mpiexec -np $NPROC -machinefile $MACHINES"
+  fi
 fi
+MPIEXE=${MPIEXE:-"mpiexec -n $NPROC"}
 
 fail () { echo "ERROR: $*"; exit 1; }
 [ -e "$OUT" ] && fail "$OUT exists"
