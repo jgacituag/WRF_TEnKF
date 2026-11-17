@@ -195,6 +195,27 @@ once into the data area:
   (`vcommon.spatial_scores`); maps, a vertical section and vertical profiles, with
   bilingual figures (`vcommon.py`).
 
+## Running on Hydra (CIMA)
+
+Fugaku became unavailable in November 2026, so the OSSE moved to Hydra. The
+runs live in the scratch area (`~/salidas`, reachable from the compute
+nodes); finished runs move to the datosmunin disks, which only the login
+node reaches.
+
+- `./make.sh INTEL_HYDRA` builds the main code; the `reference` tag, built
+  with its own `make.sh` in a worktree, is the original code that the DA
+  cycle uses. `tests/jobs/regression_hydra.sh` (PBS) compares them.
+- `osse/make_exp_hydra.sh` builds the 4 km, 5-min DA cycle from the template
+  `osse/conf/PREVENIR_4KM_5MIN_HYDRA_2024031900`: the DA settings of the
+  director's Fugaku run (`..._5MIN_WINIT`) with the Hydra machine and
+  multi-physics model settings of wrfutil's `PREVENIR_LOWRESOLUTION_DA_HYDRA`.
+  `--smoke` makes a 4-member test.
+- `osse/make_fcst_exp.sh` works on both machines (defaults follow the
+  source experiment's `machine.conf`); `osse/jobs/osse_letkf_hydra.sh` runs
+  the OSSE analyses.
+- `letkf.exe` links Intel MKL from the login environment (oneAPI 2026.0);
+  the Hydra environments add its folder to `LD_LIBRARY_PATH`.
+
 ## Use with wrfutil
 
 On Fugaku, keep the repository, builds, test cases and results in the

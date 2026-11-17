@@ -10,16 +10,19 @@
 #                         "YYYY-MM-DD hh:mm:ss" LEAD MEM_INI MEM_END ANAL_DIR [INODE]
 #
 #   SRC_EXP   experiment to copy (e.g. the director's 2 km 5-min experiment)
-#   NEW_EXP   new experiment directory (must not exist), in the group data
-#             area: /data/ra000007/$USER/...
+#   NEW_EXP   new experiment directory (must not exist): on Fugaku in the
+#             group data area (/data/ra000007/$USER/...), on Hydra in the
+#             scratch area (~/salidas = /nfsmounts/storage/scratch/$USER)
 #   date      forecast initialization (UTC)
 #   LEAD      forecast length [s]; outputs every 300 s
 #   MEM_INI, MEM_END  members to run (3 digits, e.g. 001 060)
 #   ANAL_DIR  directory with anal<NNNNN> files valid at the initialization;
 #             linked as NEW_EXP/HIST/ANAL/<YYYYmmddHHMMSS>
-#   INODE     nodes for the job (default 240: 30 members of 8 nodes at a
-#             time, which keeps the job in the "small" resource group)
-#   --time HH:MM:SS  job time limit (default 02:00:00)
+#   INODE     nodes for the job (default: on Fugaku 240, 30 members of 8
+#             nodes at a time, which keeps the job in the "small" resource
+#             group; on Hydra the INODE of SRC_EXP, one member per node)
+#   --time HH:MM:SS  job time limit (default 02:00:00 on Fugaku, 04:00:00 on
+#             Hydra)
 #
 # Boundary options (lateral boundaries come from met_em files):
 #   (none)                    use SRC_EXP/HIST/WPS/met_em through EXTWPSPATH.
@@ -71,8 +74,9 @@
 # group is close to its inode limit.
 #=======================================================================
 set -e
-DRY=0 ; BDYMODE=src ; BDYARG="" ; TLIM=02:00:00
-W2W=$(cd "$(dirname "$0")/.." && pwd)/build/FUJITSU_FUGAKU/wrf_to_wps.exe
+DRY=0 ; BDYMODE=src ; BDYARG="" ; TLIM=""
+BUILD=${BUILD:-$( [ -d /opt/FJSVxtclanga ] && echo FUJITSU_FUGAKU || echo INTEL_HYDRA )}
+W2W=$(cd "$(dirname "$0")/.." && pwd)/build/$BUILD/wrf_to_wps.exe
 while [[ "$1" == --* ]]; do
   case $1 in
     --dry-run)       DRY=1 ; shift ;;
@@ -93,7 +97,16 @@ LEAD=$4
 MEM_INI=$5
 MEM_END=$6
 ANAL_DIR=$(readlink -f "$7")
-INODE=${8:-240}
+#Machine of the source experiment: defaults and the queue library to check
+MACHINE=$(grep -E "^ *(export +)?MACHINE=" $SRC/conf/machine.conf 2>/dev/null | head -1 | sed -E "s/.*MACHINE=['\"]?([A-Za-z]*).*/\1/")
+QUEUESYS=$(grep -E "^ *(export +)?QUEUESYS=" $SRC/conf/machine.conf 2>/dev/null | head -1 | sed -E "s/.*QUEUESYS=['\"]?([A-Za-z_]*).*/\1/")
+if [ "$MACHINE" == "HYDRA" ]; then
+  INODE=${8:-$(grep -E "^ *(export +)?INODE=" $SRC/conf/machine.conf | head -1 | sed -E 's/.*INODE=([0-9]*).*/\1/')}
+  TLIM=${TLIM:-04:00:00}
+else
+  INODE=${8:-240}
+  TLIM=${TLIM:-02:00:00}
+fi
 INIT_TAG=$(date -u -d "$INIT UTC" +%Y%m%d%H%M%S)
 NEWABS=$(readlink -m $NEW)
 MEMS=$(seq -f %03g $((10#$MEM_INI)) $((10#$MEM_END)))
@@ -122,7 +135,8 @@ UNREADABLE=$(cd $SRC && find bin lib conf NAMELIST \( -name '*.out' -o -name '*.
               -o -name '.*' -o -name '__pycache__' -o -name 'nohup.out' \) -prune -o ! -readable -print 2>/dev/null)
 [ -n "$UNREADABLE" ] && echo "$UNREADABLE" | sed 's/^/        unreadable /'
 check "every file to copy from bin, lib, conf, NAMELIST is readable" test -z "$UNREADABLE"
-for f in bin/main_FCST.sh bin/run_ensfcst.sh bin/run_WPS.sh lib/timeutils.sh lib/encolarPJM.sh; do
+echo "  info  source machine $MACHINE, queue $QUEUESYS; INODE=$INODE, limit $TLIM"
+for f in bin/main_FCST.sh bin/run_ensfcst.sh bin/run_WPS.sh lib/timeutils.sh lib/encolar${QUEUESYS}.sh; do
   check "readable $f" test -r $SRC/$f
 done
 check "queue_sub.sh present" test -x $SRC/bin/queue_sub.sh
@@ -134,6 +148,7 @@ check "initial analyses anal00$MEM_INI..anal00$MEM_END in $ANAL_DIR" test $nmiss
 check "new experiment does not exist yet" test ! -e $NEW
 case $NEWABS in
   /vol0004/*|/data/*) check "new experiment in the data area" true ;;
+  /nfsmounts/storage/scratch/*) check "new experiment in the scratch area" true ;;
   *) if [ -n "$ALLOW_ANY_DIR" ]; then check "new experiment outside the data area (ALLOW_ANY_DIR, tests only)" true
      else check "new experiment in the data area (got $NEW)" false ; fi ;;
 esac
