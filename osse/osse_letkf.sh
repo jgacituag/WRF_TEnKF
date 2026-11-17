@@ -68,6 +68,7 @@ if [ -d /opt/FJSVxtclanga ]; then
 #Runtime environment of wrfutil on Hydra (machine.conf, MACHINE=HYDRA)
 elif [ -r /opt/load-libs.sh ]; then
   source /opt/load-libs.sh 1
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/intel/oneapi/mkl/2026.0/lib:/opt/intel/oneapi/compiler/2026.0/lib   #MKL and OpenMP runtime of letkf.exe (make.sh INTEL_HYDRA links -qmkl against the login environment), after the libraries WRF uses
   export HDF5_USE_FILE_LOCKING=FALSE
   ulimit -s unlimited
   export OMP_NUM_THREADS=${OMP_NUM_THREADS:-48}
