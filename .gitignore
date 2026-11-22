@@ -4,3 +4,7 @@ dist/
 *.mod
 __pycache__/
 verif/figures/
+
+# PBS job logs (<name>.o<jobid>, <name>.e<jobid>)
+*.o[0-9]*
+*.e[0-9]*

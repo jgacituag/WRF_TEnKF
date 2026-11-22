@@ -172,28 +172,27 @@ from the source.
 
 ## OSSE verification (`verif/`)
 
-Python 3 with numpy, scipy, pandas, matplotlib and netCDF4; on Fugaku, a Jupyter
-session on a pre/post node (Open OnDemand, System "Prepost"), with netCDF4 installed
-once into the data area:
-`python3.12 -m pip install --no-deps --target /data/ra000007/$USER/pylib netCDF4 cftime certifi`.
+Python 3 with numpy, scipy, pandas, matplotlib and netCDF4.
 
 - `osse_io.py` reads wrfout files and applies the reflectivity operator of the LETKF
   (Tong & Xue 2006, method 2 of `calc_ref_vr`) in NumPy.
 - `check_operator.py TRUTH_WRFOUT truth_rad0101.dat` compares it with the Fortran
   values `synth_obs` wrote for the truth at every observation (must agree within
   0.01 dBZ).
-- `reduce_osse.py` reads, for each valid time, the truth, the reference ensemble (the
-  prior at 18:00, the forecast without DA afterwards) and each experiment, level chunk by
-  level chunk (`--kchunk`, sized to the session memory), and writes to
-  `osse/osse18/verif/` pooled sums per experiment, variable and domain (whole box; echo
-  cells, where the truth or any ensemble mean reaches 10 dBZ, the same cells for every
-  experiment; observed cells), per-level sums, 2-D slices, and the column-maximum
-  reflectivity of every member.
-- `V1_OSSE_1800.ipynb` reads them: RMSE, CRPS, spread and skill scores of the analyses
-  and of the forecasts by lead time; FSS by scale, ROC AUC of the neighborhood ensemble
-  probability and frequency bias of the column maximum at 20 and 35 dBZ
-  (`vcommon.spatial_scores`); maps, a vertical section and vertical profiles, with
-  bilingual figures (`vcommon.py`).
+- `reduce_osse.py` reduces one run (`--exp noda` or `ntN`) at the requested valid
+  times, reading only that run's members and the truth, so that each forecast run can be
+  reduced as soon as it ends. It writes pooled sums per variable over domains fixed by
+  the truth (whole box, observed cells, storm columns, truth echo), in total and per
+  level, and compact per-cell fields: reflectivity mean, variance and CRPS, the mean
+  hydrometeor mass and the column maximum of every member; plus the truth at each time
+  and the masks. `osse/jobs/reduce_osse_hydra.sh` runs it on one node of Hydra.
+- `vcommon.py` holds what the verification notebooks share: loading the reduced files;
+  RMSE, bias, CRPS, spread, spread/RMSE and skill scores; what compares runs at one
+  time (the echo domain shared by all runs, false and missed echo and the hydrometeor
+  mass outside the truth's echo, the fraction of cells that improve, rank histograms and
+  probabilities of the column maximum); FSS, ROC AUC and frequency bias of the column
+  maximum (`spatial_scores`); and bilingual figures. The notebooks are kept outside the
+  repository, next to the reduced files (`VERIF_DIR`).
 
 ## Running on Hydra (CIMA)
 
