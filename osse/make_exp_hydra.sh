@@ -41,6 +41,9 @@
 #                   the original code built with make.sh INTEL_HYDRA]
 #   --wrfutil DIR   wrfutil_hydra clone [~/salidas/wrfutil_hydra]
 #
+# bin/run_LETKF.sh is the WRF_TEnKF version (analyses copied to new files;
+# tempering settings from letkf.conf, none set = the original LETKF).
+#
 # After building: cd NEW_EXP/bin && ./queue_sub.sh main_ASIM.sh
 # To restart after a time limit, set INI_STEP in NEW_EXP/conf/exp.conf to
 # the first step that did not finish and submit again.
@@ -231,6 +234,10 @@ setvar $C/machine.conf PERTPROC         $PERTPROC
 ( cd $TMP/bin && bash CreateExp.sh $TEMPLATE $NEW ) > $TMP/create.log 2>&1 || { cat $TMP/create.log; exit 1; }
 mkdir -p $NEW/HIST/ANAL $NEW/HIST/GUES $NEW/HIST/WPS
 cp $TMP/create.log $NEW/LOGS/create_exp.log
+#run_LETKF.sh of WRF_TEnKF instead of wrfutil's: it writes each analysis to a
+#new file with direct reads (stale NFS pages, see bin/run_LETKF.sh) and passes
+#the tempering settings (none set: the original LETKF).
+cp $ROOT/bin/run_LETKF.sh $NEW/bin/run_LETKF.sh
 
 echo "== Checks of the new experiment"
 nfail=0
@@ -240,6 +247,7 @@ for f in WPS/wps.tar WPS/wrf_to_wps.tar WPS/$BDYVTABLE WRF/wrf.tar WRF/wrfda.tar
   check "$f" test -s $NEW/$f
 done
 check "no placeholders left in conf/" bash -c "! grep -l '__[A-Z]*__' $NEW/conf/*"
+check "bin/run_LETKF.sh writes analyses to new files (WRF_TEnKF)" grep -q "iflag=direct" $NEW/bin/run_LETKF.sh
 echo "== Changed lines"
 grep -h "make_exp_hydra.sh" $NEW/conf/*.conf | sed 's/   # set by.*//; s/^/  /'
 [ $nfail -eq 0 ] || { echo "== $nfail failed checks in $NEW"; exit 1; }
