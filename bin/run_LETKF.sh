@@ -163,14 +163,16 @@ fi
 echo "Copying analysis files"
 DIRANAL=$HISTDIR/ANAL/$ANALYSIS_DATE_PFMT
 mkdir -p  ${DIRANAL}/
-#WRF_TEnKF: the analysis is the member's guess file, written by WRF on one
-#node and overwritten in place by the LETKF from other nodes. Moving it
-#(mv keeps the same file) let the next forecast, often on the node that
-#wrote the guess, read stale pages of the guess from that node's NFS cache
-#(Hydra scratch, Nov 2026: up to 47 of 60 members per cycle started from a
-#mix of guess and analysis). Each analysis is therefore copied into a new
-#file with direct reads, which bypass this node's cache, and the original
-#is removed. No node has cached pages of the new file.
+#WRF_TEnKF: the analysis is the member's guess file, written by WRF on the
+#member's node and overwritten in place by the LETKF from other nodes. With
+#mv (same file), the next forecast's copy reads a file whose pages that node
+#may still cache. That was not what went wrong on Hydra (Nov 2026): there the
+#member's node resolved wrfinput_d01 to real.exe's file after the head node
+#renamed it (stale NFS names; up to 47 of 60 members per cycle), fixed in
+#bin/run_ensfcst.sh, which now renames and copies on the member's node. As a
+#second protection, each analysis is copied here into a new file with direct
+#reads, which bypass this node's cache, and the original is removed, so no
+#node has cached pages or names of the new file.
 copy_anal () {   # $1 = member
    local SRC=$WRFDIR/$1/wrfout_d01_$ANALYSIS_DATE_WFMT
    local DST=$DIRANAL/anal$(printf %05d $((10#$1)))

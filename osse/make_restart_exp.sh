@@ -10,6 +10,9 @@
 # the tar), bin/run_LETKF.sh and namelists/letkf.namelist, which add the
 # &tempering block, with NTEMP, ALPHA_S and TEMP_RELAX_MODE in letkf.conf.
 # The source's inflation, relaxation, localization and observations stay.
+# bin/run_ensfcst.sh (+ bin/wrfinput_from_anal.sh) of this repository replaces the
+# source's too: it renames wrfinput_d01 and copies the analysis on the member's node
+# (stale NFS names on Hydra, see bin/run_ensfcst.sh); otherwise it is the source's.
 # With --ntemp 1 the LETKF reproduces the source's bit for bit (regression
 # test), so that run repeats the source.
 #
@@ -37,7 +40,8 @@
 # observations at every step, the LETKF tar, that this repository's
 # run_LETKF.sh and letkf.namelist differ from the source's only by the
 # tempering lines, and run_LETKF.sh also by the analyses being copied to new
-# files with direct reads, which avoids stale NFS reads) and prints the
+# files with direct reads, which avoids stale NFS reads), that its
+# run_ensfcst.sh is the source's but for the #WRF_TEnKF blocks, and prints the
 # changes without creating anything.
 #
 # The new experiment keeps every guess and analysis from RESTART_DATE on
@@ -83,6 +87,13 @@ confstr () { # $1 = file, $2 = variable: first value assigned, quotes and commen
 tempering_only () {  # $1 = this repository's file, $2 = the source's: same but for the tempering lines
   diff -q <(grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e '^&tempering' \
                    -e 'Tempering (WRF_TEnKF)' $1 | sed '/^\/$/{N;s/^\/\n\//\//}') $2 > /dev/null 2>&1
+}
+ensfcst_script_ok () {  # $1 = this repository's run_ensfcst.sh, $2 = the source's: equal, or equal once
+                      # the repository's #WRF_TEnKF{ ... #WRF_TEnKF} blocks are replaced by their #orig: lines
+  grep -q "wrfinput_from_anal.sh" "$1" || return 1
+  cmp -s "$1" "$2" && return 0
+  diff -q <(awk '/^#WRF_TEnKF\{/{inb=1; next} /^#WRF_TEnKF\}/{inb=0; next} inb && /^#orig: /{print substr($0, 8); next} !inb' "$1") \
+          "$2" > /dev/null 2>&1
 }
 save_region_out () {  # run_LETKF.sh without the part that saves the analyses
   awk '/^echo "Copying analysis files"/{skip=1} /^#mv \$LETKFDIRRUN\/\*_sp/{skip=0} !skip' "$1"
@@ -144,6 +155,8 @@ check "observation files in $OBSPATH at $NOBS/$NSTEP analysis times" test $NOBS 
 check "LETKF tar $TAR holds letkf.exe" bash -c "tar -tf $TAR 2>/dev/null | grep -qx letkf.exe"
 check "bin/run_LETKF.sh = the source's + tempering lines + analyses copied to new files" letkf_script_ok $ROOT/bin/run_LETKF.sh $SRC/bin/run_LETKF.sh
 check "namelists/letkf.namelist = the source's + &tempering block" tempering_only $ROOT/namelists/letkf.namelist $SRC/NAMELIST/letkf.namelist
+check "bin/run_ensfcst.sh = the source's + #WRF_TEnKF blocks (renames on the member's node)" ensfcst_script_ok $ROOT/bin/run_ensfcst.sh $SRC/bin/run_ensfcst.sh
+check "bin/wrfinput_from_anal.sh executable" test -x $ROOT/bin/wrfinput_from_anal.sh
 check "NTEMP=$NTEMP between 1 and 20, TEMP_RELAX_MODE=$RELAX 1 or 2" \
       test "$NTEMP" -ge 1 -a "$NTEMP" -le 20 -a \( "$RELAX" == 1 -o "$RELAX" == 2 \)
 
@@ -154,7 +167,7 @@ cat <<EOF
                      RUN_WPS=0  RUN_BDY_PERT=0  EXTWPSPATH=""
   conf/letkf.conf  : NTEMP=$NTEMP  ALPHA_S=$ALPHA_S  TEMP_RELAX_MODE=$RELAX
   conf/machine.conf: TOTAL_TIME_LIMIT=$TLIM
-  bin/run_LETKF.sh, NAMELIST/letkf.namelist <- $ROOT (copies)
+  bin/run_LETKF.sh, bin/run_ensfcst.sh, bin/wrfinput_from_anal.sh, NAMELIST/letkf.namelist <- $ROOT (copies)
   LETKF/letkf.tar  <- $TAR (copy)
   HIST/ANAL/$TAG/*  -> $SRC/HIST/ANAL/$TAG/* (file links)
   HIST/WPS/met_em/*/*/* -> $SRC/HIST/WPS/met_em (file links)
@@ -175,6 +188,7 @@ TAR_EXCLUDE="--exclude=*.out --exclude=*.err --exclude=*.stats --exclude=.* --ex
 ( cd $SRC && tar -cf - $TAR_EXCLUDE bin lib conf NAMELIST ) | ( cd $NEW && tar -xf - )
 rm -f $NEW/conf/step.conf
 cp $ROOT/bin/run_LETKF.sh $NEW/bin/run_LETKF.sh
+cp -p $ROOT/bin/run_ensfcst.sh $ROOT/bin/wrfinput_from_anal.sh $NEW/bin/
 cp $ROOT/namelists/letkf.namelist $NEW/NAMELIST/letkf.namelist
 mkdir -p $NEW/LETKF $NEW/WRF/code $NEW/HIST/ANAL $NEW/HIST/WPS $NEW/LOGS $NEW/PROCS
 cp $TAR $NEW/LETKF/letkf.tar              #a copy, so a later rebuild cannot change a running experiment

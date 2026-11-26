@@ -43,6 +43,8 @@
 #
 # bin/run_LETKF.sh is the WRF_TEnKF version (analyses copied to new files;
 # tempering settings from letkf.conf, none set = the original LETKF).
+# bin/run_ensfcst.sh is wrfutil's with the #WRF_TEnKF blocks (wrfinput_d01 renamed
+# and the analysis copied on the member's node, with bin/wrfinput_from_anal.sh).
 #
 # After building: cd NEW_EXP/bin && ./queue_sub.sh main_ASIM.sh
 # To restart after a time limit, set INI_STEP in NEW_EXP/conf/exp.conf to
@@ -82,6 +84,13 @@ check () {   # $1 = description, $2... = test
 }
 confval () { # $1 = file, $2 = variable: first value assigned (quotes removed)
   grep -E "^ *(export +)?$2=" $1 | head -1 | sed -E "s/^ *(export +)?$2=//; s/[[:space:]]+#.*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+}
+ensfcst_script_ok () {  # $1 = this repository's run_ensfcst.sh, $2 = the source's: equal, or equal once
+                      # the repository's #WRF_TEnKF{ ... #WRF_TEnKF} blocks are replaced by their #orig: lines
+  grep -q "wrfinput_from_anal.sh" "$1" || return 1
+  cmp -s "$1" "$2" && return 0
+  diff -q <(awk '/^#WRF_TEnKF\{/{inb=1; next} /^#WRF_TEnKF\}/{inb=0; next} inb && /^#orig: /{print substr($0, 8); next} !inb' "$1") \
+          "$2" > /dev/null 2>&1
 }
 setvar () {  # $1 = file, $2 = variable, $3 = value (written verbatim)
   local f=$1 v=$2 val=$3
@@ -139,6 +148,7 @@ for f in bin/CreateExp.sh bin/main_ASIM.sh bin/queue_sub.sh bin/run_LETKF.sh lib
          namelists/SMN/letkf.namelist namelists/SMN/namelist.input.006 vtables/$BDYVTABLE; do
   check "wrfutil $f" test -r $WRFUTIL/$f
 done
+check "wrfutil bin/run_ensfcst.sh = the original of WRF_TEnKF's (its #orig: lines)" ensfcst_script_ok $ROOT/bin/run_ensfcst.sh $WRFUTIL/bin/run_ensfcst.sh
 for f in $TDIR/{config.env,exp.conf,letkf.conf,machine.conf,model.conf,obs.conf}; do
   check "template $(basename $f)" test -r $f
 done
@@ -238,6 +248,8 @@ cp $TMP/create.log $NEW/LOGS/create_exp.log
 #new file with direct reads (stale NFS pages, see bin/run_LETKF.sh) and passes
 #the tempering settings (none set: the original LETKF).
 cp $ROOT/bin/run_LETKF.sh $NEW/bin/run_LETKF.sh
+#run_ensfcst.sh of WRF_TEnKF: renames and copies on the member's node (stale NFS names)
+cp -p $ROOT/bin/run_ensfcst.sh $ROOT/bin/wrfinput_from_anal.sh $NEW/bin/
 
 echo "== Checks of the new experiment"
 nfail=0
@@ -248,6 +260,8 @@ for f in WPS/wps.tar WPS/wrf_to_wps.tar WPS/$BDYVTABLE WRF/wrf.tar WRF/wrfda.tar
 done
 check "no placeholders left in conf/" bash -c "! grep -l '__[A-Z]*__' $NEW/conf/*"
 check "bin/run_LETKF.sh writes analyses to new files (WRF_TEnKF)" grep -q "iflag=direct" $NEW/bin/run_LETKF.sh
+check "bin/run_ensfcst.sh renames wrfinput_d01 on the member's node (WRF_TEnKF)" grep -q "wrfinput_from_anal.sh" $NEW/bin/run_ensfcst.sh
+check "bin/wrfinput_from_anal.sh executable" test -x $NEW/bin/wrfinput_from_anal.sh
 echo "== Changed lines"
 grep -h "make_exp_hydra.sh" $NEW/conf/*.conf | sed 's/   # set by.*//; s/^/  /'
 [ $nfail -eq 0 ] || { echo "== $nfail failed checks in $NEW"; exit 1; }
