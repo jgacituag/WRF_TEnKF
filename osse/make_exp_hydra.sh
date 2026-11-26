@@ -41,8 +41,8 @@
 #                   the original code built with make.sh INTEL_HYDRA]
 #   --wrfutil DIR   wrfutil_hydra clone [~/salidas/wrfutil_hydra]
 #
-# bin/run_LETKF.sh is the WRF_TEnKF version (analyses copied to new files;
-# tempering settings from letkf.conf, none set = the original LETKF).
+# bin/run_LETKF.sh is the WRF_TEnKF version: wrfutil's, passing the tempering
+# settings of letkf.conf to the namelist (none set = the original LETKF).
 # bin/run_ensfcst.sh is wrfutil's with the #WRF_TEnKF blocks (wrfinput_d01 renamed
 # and the analysis copied on the member's node, with bin/wrfinput_from_anal.sh).
 #
@@ -91,6 +91,9 @@ ensfcst_script_ok () {  # $1 = this repository's run_ensfcst.sh, $2 = the source
   cmp -s "$1" "$2" && return 0
   diff -q <(awk '/^#WRF_TEnKF\{/{inb=1; next} /^#WRF_TEnKF\}/{inb=0; next} inb && /^#orig: /{print substr($0, 8); next} !inb' "$1") \
           "$2" > /dev/null 2>&1
+}
+letkf_script_ok () {  # $1 = this repository's run_LETKF.sh, $2 = wrfutil's: equal once the tempering lines are removed
+  diff -q <(grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e 'Tempering (WRF_TEnKF)' "$1") "$2" > /dev/null 2>&1
 }
 setvar () {  # $1 = file, $2 = variable, $3 = value (written verbatim)
   local f=$1 v=$2 val=$3
@@ -149,6 +152,7 @@ for f in bin/CreateExp.sh bin/main_ASIM.sh bin/queue_sub.sh bin/run_LETKF.sh lib
   check "wrfutil $f" test -r $WRFUTIL/$f
 done
 check "wrfutil bin/run_ensfcst.sh = the original of WRF_TEnKF's (its #orig: lines)" ensfcst_script_ok $ROOT/bin/run_ensfcst.sh $WRFUTIL/bin/run_ensfcst.sh
+check "wrfutil bin/run_LETKF.sh = WRF_TEnKF's without the tempering lines" letkf_script_ok $ROOT/bin/run_LETKF.sh $WRFUTIL/bin/run_LETKF.sh
 for f in $TDIR/{config.env,exp.conf,letkf.conf,machine.conf,model.conf,obs.conf}; do
   check "template $(basename $f)" test -r $f
 done
@@ -244,9 +248,8 @@ setvar $C/machine.conf PERTPROC         $PERTPROC
 ( cd $TMP/bin && bash CreateExp.sh $TEMPLATE $NEW ) > $TMP/create.log 2>&1 || { cat $TMP/create.log; exit 1; }
 mkdir -p $NEW/HIST/ANAL $NEW/HIST/GUES $NEW/HIST/WPS
 cp $TMP/create.log $NEW/LOGS/create_exp.log
-#run_LETKF.sh of WRF_TEnKF instead of wrfutil's: it writes each analysis to a
-#new file with direct reads (stale NFS pages, see bin/run_LETKF.sh) and passes
-#the tempering settings (none set: the original LETKF).
+#run_LETKF.sh of WRF_TEnKF instead of wrfutil's: wrfutil's, passing the
+#tempering settings (none set: the original LETKF).
 cp $ROOT/bin/run_LETKF.sh $NEW/bin/run_LETKF.sh
 #run_ensfcst.sh of WRF_TEnKF: renames and copies on the member's node (stale NFS names)
 cp -p $ROOT/bin/run_ensfcst.sh $ROOT/bin/wrfinput_from_anal.sh $NEW/bin/
@@ -259,7 +262,7 @@ for f in WPS/wps.tar WPS/wrf_to_wps.tar WPS/$BDYVTABLE WRF/wrf.tar WRF/wrfda.tar
   check "$f" test -s $NEW/$f
 done
 check "no placeholders left in conf/" bash -c "! grep -l '__[A-Z]*__' $NEW/conf/*"
-check "bin/run_LETKF.sh writes analyses to new files (WRF_TEnKF)" grep -q "iflag=direct" $NEW/bin/run_LETKF.sh
+check "bin/run_LETKF.sh = WRF_TEnKF's" cmp -s $ROOT/bin/run_LETKF.sh $NEW/bin/run_LETKF.sh
 check "bin/run_ensfcst.sh renames wrfinput_d01 on the member's node (WRF_TEnKF)" grep -q "wrfinput_from_anal.sh" $NEW/bin/run_ensfcst.sh
 check "bin/wrfinput_from_anal.sh executable" test -x $NEW/bin/wrfinput_from_anal.sh
 echo "== Changed lines"

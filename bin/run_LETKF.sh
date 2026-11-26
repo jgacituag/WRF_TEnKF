@@ -162,40 +162,12 @@ fi
 ##
 echo "Copying analysis files"
 DIRANAL=$HISTDIR/ANAL/$ANALYSIS_DATE_PFMT
-mkdir -p  ${DIRANAL}/
-#WRF_TEnKF: the analysis is the member's guess file, written by WRF on the
-#member's node and overwritten in place by the LETKF from other nodes. With
-#mv (same file), the next forecast's copy reads a file whose pages that node
-#may still cache. That was not what went wrong on Hydra (Nov 2026): there the
-#member's node resolved wrfinput_d01 to real.exe's file after the head node
-#renamed it (stale NFS names; up to 47 of 60 members per cycle), fixed in
-#bin/run_ensfcst.sh, which now renames and copies on the member's node. As a
-#second protection, each analysis is copied here into a new file with direct
-#reads, which bypass this node's cache, and the original is removed, so no
-#node has cached pages or names of the new file.
-copy_anal () {   # $1 = member
-   local SRC=$WRFDIR/$1/wrfout_d01_$ANALYSIS_DATE_WFMT
-   local DST=$DIRANAL/anal$(printf %05d $((10#$1)))
-   dd if=$SRC of=$DST iflag=direct bs=16M conv=fsync status=none || return 1
-   $LETKFDIR/code/update_wrf_time.exe $DST $ANALYSIS_DATE_WFMT   || return 1
-   rm -f $SRC
-}
-NCOPYFAIL=0 ; NBATCH=0 ; PIDS=""
 for IMEM in $(seq -w $MEM_INI $MEM_END ) ; do
-   echo "Copying the analysis of member $IMEM and updating its date to $ANALYSIS_DATE_WFMT"
-   copy_anal $IMEM &
-   PIDS="$PIDS $!" ; NBATCH=$((NBATCH+1))
-   if [ $NBATCH -eq 10 ] ; then
-      for p in $PIDS ; do wait $p || NCOPYFAIL=$((NCOPYFAIL+1)) ; done
-      PIDS="" ; NBATCH=0
-   fi
+        mkdir -p  ${DIRANAL}/
+	echo "Updating the date in the analysis file " $WRFDIR/$IMEM/wrfout_d01_$ANALYSIS_DATE_WFMT $ANALYSIS_DATE_WFMT
+	$LETKFDIR/code/update_wrf_time.exe $WRFDIR/$IMEM/wrfout_d01_$ANALYSIS_DATE_WFMT $ANALYSIS_DATE_WFMT
+        mv  $WRFDIR/$IMEM/wrfout_d01_$ANALYSIS_DATE_WFMT $DIRANAL/anal$(printf %05d $((10#$IMEM)))
 done
-for p in $PIDS ; do wait $p || NCOPYFAIL=$((NCOPYFAIL+1)) ; done
-if [ $NCOPYFAIL -gt 0 ] ; then
-   echo "Error: $NCOPYFAIL analysis files could not be copied to $DIRANAL"
-   echo "Aborting this step"
-   exit 1
-fi
 
 #mv $LETKFDIRRUN/*_sp $DIRANAL
 $LETKFDIR/code/update_wrf_time.exe $LETKFDIRRUN/analemean $ANALYSIS_DATE_WFMT

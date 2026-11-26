@@ -39,8 +39,7 @@
 # --dry-run checks every input (the analyses, the met_em of every member,
 # observations at every step, the LETKF tar, that this repository's
 # run_LETKF.sh and letkf.namelist differ from the source's only by the
-# tempering lines, and run_LETKF.sh also by the analyses being copied to new
-# files with direct reads, which avoids stale NFS reads), that its
+# tempering lines, that its
 # run_ensfcst.sh is the source's but for the #WRF_TEnKF blocks, and prints the
 # changes without creating anything.
 #
@@ -98,11 +97,13 @@ ensfcst_script_ok () {  # $1 = this repository's run_ensfcst.sh, $2 = the source
 save_region_out () {  # run_LETKF.sh without the part that saves the analyses
   awk '/^echo "Copying analysis files"/{skip=1} /^#mv \$LETKFDIRRUN\/\*_sp/{skip=0} !skip' "$1"
 }
-letkf_script_ok () {  # $1 = this repository's run_LETKF.sh, $2 = the source's: same but for the
-                      # tempering lines and the analyses copied to new files (bin/run_LETKF.sh)
-  grep -q "iflag=direct" "$1" || return 1
-  diff -q <(grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e 'Tempering (WRF_TEnKF)' "$1" \
-            | save_region_out /dev/stdin) <(save_region_out "$2") > /dev/null 2>&1
+strip_tempering () { grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e 'Tempering (WRF_TEnKF)' "$1" ; }
+letkf_script_ok () {  # $1 = this repository's run_LETKF.sh, $2 = the source's: equal once the tempering
+                      # lines are removed (wrfutil's original passes). A source that copies its analyses to
+                      # new files (9ccfd9b, reverted) passes too, without comparing the part that saves them.
+  diff -q <(strip_tempering "$1") <(strip_tempering "$2") > /dev/null 2>&1 && return 0
+  grep -q "iflag=direct" "$2" || return 1
+  diff -q <(strip_tempering "$1" | save_region_out /dev/stdin) <(strip_tempering "$2" | save_region_out /dev/stdin) > /dev/null 2>&1
 }
 
 #Source settings
@@ -153,7 +154,7 @@ NOBS=0
 for t in $STEP_TAGS; do ls $OBSPATH/*/WRF_*_$t.dat > /dev/null 2>&1 && NOBS=$((NOBS+1)); done
 check "observation files in $OBSPATH at $NOBS/$NSTEP analysis times" test $NOBS -eq $NSTEP
 check "LETKF tar $TAR holds letkf.exe" bash -c "tar -tf $TAR 2>/dev/null | grep -qx letkf.exe"
-check "bin/run_LETKF.sh = the source's + tempering lines + analyses copied to new files" letkf_script_ok $ROOT/bin/run_LETKF.sh $SRC/bin/run_LETKF.sh
+check "bin/run_LETKF.sh = the source's + tempering lines" letkf_script_ok $ROOT/bin/run_LETKF.sh $SRC/bin/run_LETKF.sh
 check "namelists/letkf.namelist = the source's + &tempering block" tempering_only $ROOT/namelists/letkf.namelist $SRC/NAMELIST/letkf.namelist
 check "bin/run_ensfcst.sh = the source's + #WRF_TEnKF blocks (renames on the member's node)" ensfcst_script_ok $ROOT/bin/run_ensfcst.sh $SRC/bin/run_ensfcst.sh
 check "bin/wrfinput_from_anal.sh executable" test -x $ROOT/bin/wrfinput_from_anal.sh
