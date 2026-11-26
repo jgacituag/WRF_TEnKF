@@ -36,7 +36,9 @@
 # --dry-run checks every input (the analyses, the met_em of every member,
 # observations at every step, the LETKF tar, that this repository's
 # run_LETKF.sh and letkf.namelist differ from the source's only by the
-# tempering lines) and prints the changes without creating anything.
+# tempering lines, and run_LETKF.sh also by the analyses being copied to new
+# files with direct reads, which avoids stale NFS reads) and prints the
+# changes without creating anything.
 #
 # The new experiment keeps every guess and analysis from RESTART_DATE on
 # (keep_times.txt, read by prune_hist.sh). Submit with the source's job
@@ -81,6 +83,15 @@ confstr () { # $1 = file, $2 = variable: first value assigned, quotes and commen
 tempering_only () {  # $1 = this repository's file, $2 = the source's: same but for the tempering lines
   diff -q <(grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e '^&tempering' \
                    -e 'Tempering (WRF_TEnKF)' $1 | sed '/^\/$/{N;s/^\/\n\//\//}') $2 > /dev/null 2>&1
+}
+save_region_out () {  # run_LETKF.sh without the part that saves the analyses
+  awk '/^echo "Copying analysis files"/{skip=1} /^#mv \$LETKFDIRRUN\/\*_sp/{skip=0} !skip' "$1"
+}
+letkf_script_ok () {  # $1 = this repository's run_LETKF.sh, $2 = the source's: same but for the
+                      # tempering lines and the analyses copied to new files (bin/run_LETKF.sh)
+  grep -q "iflag=direct" "$1" || return 1
+  diff -q <(grep -v -e '__NTEMP__' -e '__ALPHA_S__' -e '__TEMP_RELAX_MODE__' -e 'Tempering (WRF_TEnKF)' "$1" \
+            | save_region_out /dev/stdin) <(save_region_out "$2") > /dev/null 2>&1
 }
 
 #Source settings
@@ -131,7 +142,7 @@ NOBS=0
 for t in $STEP_TAGS; do ls $OBSPATH/*/WRF_*_$t.dat > /dev/null 2>&1 && NOBS=$((NOBS+1)); done
 check "observation files in $OBSPATH at $NOBS/$NSTEP analysis times" test $NOBS -eq $NSTEP
 check "LETKF tar $TAR holds letkf.exe" bash -c "tar -tf $TAR 2>/dev/null | grep -qx letkf.exe"
-check "bin/run_LETKF.sh = the source's + tempering lines" tempering_only $ROOT/bin/run_LETKF.sh $SRC/bin/run_LETKF.sh
+check "bin/run_LETKF.sh = the source's + tempering lines + analyses copied to new files" letkf_script_ok $ROOT/bin/run_LETKF.sh $SRC/bin/run_LETKF.sh
 check "namelists/letkf.namelist = the source's + &tempering block" tempering_only $ROOT/namelists/letkf.namelist $SRC/NAMELIST/letkf.namelist
 check "NTEMP=$NTEMP between 1 and 20, TEMP_RELAX_MODE=$RELAX 1 or 2" \
       test "$NTEMP" -ge 1 -a "$NTEMP" -le 20 -a \( "$RELAX" == 1 -o "$RELAX" == 2 \)
